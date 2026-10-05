@@ -7,6 +7,7 @@ from django.db import transaction, IntegrityError
 from django.http import HttpResponse
 from django.db.models import Sum, Q
 from datetime import datetime
+from decimal import Decimal
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -1488,74 +1489,76 @@ class TransactionViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        # Calculate balance based on previous transactions for the same account
         company_account = serializer.validated_data.get('company_account')
         date = serializer.validated_data.get('date')
-        withdraw = serializer.validated_data.get('withdraw', 0)
-        deposit = serializer.validated_data.get('deposit', 0)
-        
-        # Get the latest transaction for this account before the current date
-        latest_transaction = Transaction.objects.filter(
-            user=self.request.user,
-            company_account=company_account,
-            date__lte=date
-        ).order_by('-date', '-id').first()
-        
-        # Calculate new balance
-        previous_balance = latest_transaction.balance if latest_transaction else 0
-        new_balance = previous_balance + deposit - withdraw
-        
-        serializer.save(user=self.request.user, balance=new_balance)
-        
-        # Update balances for all subsequent transactions
-        self._update_subsequent_balances(company_account, date, serializer.instance.id)
-    
+
+        # Save with default balance 0 first
+        instance = serializer.save(user=self.request.user, balance=Decimal('0.00'))
+
+        # Recalculate balances for this account from the transaction date onward
+        self._recalculate_balances(company_account, from_date=date)
+        instance.refresh_from_db()
+
     def perform_update(self, serializer):
-        # Recalculate balance for updated transaction
-        company_account = serializer.validated_data.get('company_account')
-        date = serializer.validated_data.get('date')
-        withdraw = serializer.validated_data.get('withdraw', 0)
-        deposit = serializer.validated_data.get('deposit', 0)
-        
-        # Get the latest transaction for this account before the current date
-        latest_transaction = Transaction.objects.filter(
-            user=self.request.user,
-            company_account=company_account,
-            date__lt=date
-        ).order_by('-date', '-id').first()
-        
-        # Calculate new balance
-        previous_balance = latest_transaction.balance if latest_transaction else 0
-        new_balance = previous_balance + deposit - withdraw
-        
-        serializer.save(balance=new_balance)
-        
-        # Update balances for all subsequent transactions
-        self._update_subsequent_balances(company_account, date, serializer.instance.id)
-    
-    def _update_subsequent_balances(self, company_account, from_date, exclude_id):
-        """Update balances for all transactions after the given date"""
-        subsequent_transactions = Transaction.objects.filter(
-            user=self.request.user,
-            company_account=company_account,
-            date__gte=from_date
-        ).exclude(id=exclude_id).order_by('date', 'id')
-        
-        # Get the balance from the transaction just before the first subsequent transaction
-        if subsequent_transactions.exists():
-            first_subsequent = subsequent_transactions.first()
-            previous_transaction = Transaction.objects.filter(
-                user=self.request.user,
-                company_account=company_account,
-                date__lt=first_subsequent.date
-            ).order_by('-date', '-id').first()
-            
-            running_balance = previous_transaction.balance if previous_transaction else 0
-            
-            for transaction in subsequent_transactions:
-                running_balance = running_balance + transaction.deposit - transaction.withdraw
-                transaction.balance = running_balance
-                transaction.save(update_fields=['balance'])
+        instance = serializer.instance
+        old_account = instance.company_account
+        old_date = instance.date
+
+        updated_instance = serializer.save()
+
+        new_account = updated_instance.company_account
+        new_date = updated_instance.date
+
+        if old_account != new_account:
+            self._recalculate_balances(old_account, from_date=old_date)
+            self._recalculate_balances(new_account, from_date=new_date)
+        else:
+            min_date = min(old_date, new_date) if old_date and new_date else (new_date or old_date)
+            self._recalculate_balances(new_account, from_date=min_date)
+
+        updated_instance.refresh_from_db()
+
+    def perform_destroy(self, instance):
+        company_account = instance.company_account
+        tx_date = instance.date
+        user = instance.user
+        instance.delete()
+        self._recalculate_balances(company_account, from_date=tx_date, user=user)
+
+    def _recalculate_balances(self, company_account, from_date=None, user=None):
+        """Update balances for all transactions on or after from_date for the company account."""
+        if not company_account:
+            return
+
+        effective_user = user or (self.request.user if hasattr(self, 'request') and self.request and self.request.user.is_authenticated else company_account.user)
+
+        tx_query = Transaction.objects.filter(
+            user=effective_user,
+            company_account=company_account
+        )
+
+        if from_date:
+            previous_transaction = tx_query.filter(date__lt=from_date).order_by('-date', '-id').first()
+            running_balance = previous_transaction.balance if previous_transaction and previous_transaction.balance is not None else Decimal('0.00')
+            transactions = list(tx_query.filter(date__gte=from_date).order_by('date', 'id'))
+        else:
+            running_balance = Decimal('0.00')
+            transactions = list(tx_query.order_by('date', 'id'))
+
+        updates = []
+        for tx in transactions:
+            deposit = tx.deposit if tx.deposit is not None else Decimal('0.00')
+            withdraw = tx.withdraw if tx.withdraw is not None else Decimal('0.00')
+            running_balance = running_balance + deposit - withdraw
+            if tx.balance != running_balance:
+                tx.balance = running_balance
+                updates.append(tx)
+
+        if updates:
+            Transaction.objects.bulk_update(updates, ['balance'])
+
+    def _update_subsequent_balances(self, company_account, from_date, exclude_id=None):
+        self._recalculate_balances(company_account, from_date=from_date)
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser, JSONParser])
     def bulk_upload(self, request):
