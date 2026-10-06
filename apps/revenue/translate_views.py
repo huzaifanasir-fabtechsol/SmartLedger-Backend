@@ -1,8 +1,10 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from googletrans import Translator
-
-translator = Translator()
+try:
+    from googletrans import Translator
+    translator = Translator()
+except Exception:
+    translator = None
 
 @api_view(['POST'])
 def translate_text(request):

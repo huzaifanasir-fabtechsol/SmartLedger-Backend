@@ -191,18 +191,81 @@ class OrderViewSet(viewsets.ModelViewSet):
         orders = Order.objects.filter(user=request.user)
         expenses = Expense.objects.filter(user=request.user)
         
+        year = request.query_params.get('year')
+        month = request.query_params.get('month')
+
+        if year:
+            try:
+                year_val = int(year)
+                orders = orders.filter(transaction_date__year=year_val)
+                expenses = expenses.filter(date__year=year_val)
+            except (ValueError, TypeError):
+                pass
+
+        if month:
+            try:
+                month_val = int(month)
+                orders = orders.filter(transaction_date__month=month_val)
+                expenses = expenses.filter(date__month=month_val)
+            except (ValueError, TypeError):
+                pass
+        
         approved_amount = orders.filter(payment_status='completed').aggregate(total=Sum('total_amount'))['total'] or 0
         pending_amount = orders.filter(payment_status='pending').aggregate(total=Sum('total_amount'))['total'] or 0
         total_expense = expenses.aggregate(total=Sum('amount'))['total'] or 0
         total_purchase = orders.filter(transaction_type='purchase').aggregate(total=Sum('total_amount'))['total'] or 0
-        latest_orders = orders.order_by('-transaction_date')[:10].values('transaction_date', 'transaction_type', 'payment_status', 'total_amount')
-        
+        latest_orders = orders.order_by('-transaction_date', '-id')[:10].values('id', 'transaction_date', 'transaction_type', 'payment_status', 'total_amount')
+
+        # Monthly breakdown for chart
+        chart_year = None
+        if year:
+            try:
+                chart_year = int(year)
+            except (ValueError, TypeError):
+                pass
+        if not chart_year:
+            chart_year = datetime.now().year
+
+        year_orders = Order.objects.filter(
+            user=request.user,
+            transaction_date__year=chart_year,
+            payment_status='completed'
+        ).values('transaction_date__month').annotate(total=Sum('total_amount'))
+
+        year_expenses = Expense.objects.filter(
+            user=request.user,
+            date__year=chart_year
+        ).values('date__month').annotate(total=Sum('amount'))
+
+        month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        rev_map = {item['transaction_date__month']: float(item['total'] or 0) for item in year_orders}
+        exp_map = {item['date__month']: float(item['total'] or 0) for item in year_expenses}
+
+        monthly_chart = []
+        has_chart_data = False
+        for m in range(1, 13):
+            r = rev_map.get(m, 0.0)
+            e = exp_map.get(m, 0.0)
+            if r > 0 or e > 0:
+                has_chart_data = True
+            monthly_chart.append({
+                'm': month_labels[m - 1],
+                'month': m,
+                'rev': r,
+                'exp': e,
+                'profit': r - e
+            })
+
         return Response({
             'approved_amount': float(approved_amount),
             'pending_amount': float(pending_amount),
             'total_expense': float(total_expense),
             'total_purchase': float(total_purchase),
-            'latest_orders': list(latest_orders)
+            'latest_orders': list(latest_orders),
+            'monthly_chart': monthly_chart,
+            'has_chart_data': has_chart_data,
+            'filter_year': year,
+            'filter_month': month
         })
 
     def _calculate_item_total(self, item):

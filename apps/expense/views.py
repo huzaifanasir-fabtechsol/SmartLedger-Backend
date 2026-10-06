@@ -1,7 +1,9 @@
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -50,12 +52,35 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         category = self.request.query_params.get('category')
         date = self.request.query_params.get('date')
+        date_from = self.request.query_params.get('date_from') or self.request.query_params.get('start_date')
+        date_to = self.request.query_params.get('date_to') or self.request.query_params.get('end_date')
+        year = self.request.query_params.get('year')
+        month = self.request.query_params.get('month')
         search = self.request.query_params.get('search')
 
         if category:
             queryset = queryset.filter(category_id=category)
         if date:
             queryset = queryset.filter(date=date)
+        if date_from:
+            queryset = queryset.filter(date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(date__lte=date_to)
+        if year:
+            try:
+                queryset = queryset.filter(date__year=int(year))
+            except (ValueError, TypeError):
+                pass
+        if month:
+            try:
+                queryset = queryset.filter(date__month=int(month))
+            except (ValueError, TypeError):
+                pass
+        is_cash = self.request.query_params.get('is_cash')
+        if is_cash in ['true', 'True', '1']:
+            queryset = queryset.filter(is_cash=True)
+        elif is_cash in ['false', 'False', '0']:
+            queryset = queryset.filter(is_cash=False)
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search) |
@@ -233,6 +258,11 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 spare_part_text = f"{spare_part_text} - {expense.spare_part.address}"
             detail_data.append(["店:", spare_part_text])
 
+        if expense.is_cash:
+            detail_data.append(["支払方法:", "現金 (Cash)"])
+        elif expense.transaction:
+            detail_data.append(["支払方法:", "銀行 / 口座 (Bank / Account)"])
+
         detail_table = Table(detail_data, colWidths=[doc.width * 0.3, doc.width * 0.7])
         detail_table.setStyle(TableStyle([
             ('FONTSIZE', (0, 0), (-1, -1), 11),
@@ -253,24 +283,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         pdfmetrics.registerFont(UnicodeCIDFont('HeiseiMin-W3'))
         user = request.user
 
-        # Apply filters
+        # Get filtered queryset
         queryset = self.get_queryset()
         date = request.query_params.get('date')
+        date_from = request.query_params.get('date_from') or request.query_params.get('start_date')
+        date_to = request.query_params.get('date_to') or request.query_params.get('end_date')
+        year = request.query_params.get('year')
+        month = request.query_params.get('month')
         category = request.query_params.get('category')
-        search = request.query_params.get('search')
-
-        if date:
-            queryset = queryset.filter(date=date)
-        if category:
-            queryset = queryset.filter(category_id=category)
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(description__icontains=search) |
-                Q(category__name__icontains=search) |
-                Q(spare_part__name__icontains=search) |
-                Q(spare_part__address__icontains=search)
-            )
 
         response = HttpResponse(content_type='application/pdf')
         response['Content-Disposition'] = 'attachment; filename="expenses.pdf"'
@@ -289,6 +309,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         left_col = []
         if date:
             left_col.append(f"日付: {date}")
+        elif date_from or date_to:
+            left_col.append(f"期間: {date_from or ''} ~ {date_to or ''}")
+        elif year or month:
+            parts = []
+            if year:
+                parts.append(f"{year}年")
+            if month:
+                parts.append(f"{month}月")
+            left_col.append(f"期間: {' '.join(parts)}")
+
         if category:
             cat = ExpenseCategory.objects.filter(id=category).first()
             if cat:
@@ -333,7 +363,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             alignment=TA_RIGHT,
         )
 
-        table_data = [['Sr', '日付', 'タイトル', 'カテゴリ', '取引', 'レストラン', 'ショップ', '額']]
+        table_data = [['Sr', '日付', 'タイトル', 'カテゴリ', '支払/取引', 'レストラン', 'ショップ', '額']]
         total = 0
         for idx, expense in enumerate(queryset, 1):
             spare_part_text = '-'
@@ -341,12 +371,20 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 spare_part_text = expense.spare_part.name
                 if expense.spare_part.address:
                     spare_part_text = f"{spare_part_text} - {expense.spare_part.address}"
+
+            if expense.is_cash:
+                payment_text = '現金 (Cash)'
+            elif expense.transaction:
+                payment_text = str(expense.transaction.transaction_id or '-')
+            else:
+                payment_text = '-'
+
             table_data.append([
                 str(idx),
                 str(expense.date),
                 Paragraph(expense.title, cell_style),
                 Paragraph(expense.category.name if expense.category else '-', cell_style),
-                Paragraph(f"{expense.transaction.transaction_id}" if expense.transaction else '-', cell_style),
+                Paragraph(payment_text, cell_style),
                 Paragraph(expense.restaurant.name if expense.restaurant else '-', cell_style),
                 Paragraph(spare_part_text, cell_style),
                 Paragraph(f"¥ {expense.amount:,.0f}", right_cell_style)
@@ -388,6 +426,126 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             onFirstPage=self._add_first_page_decorations,
             onLaterPages=self._add_later_page_decorations,
         )
+        return response
+
+    @action(detail=False, methods=['get'])
+    def export_xlsx(self, request):
+        queryset = self.get_queryset()
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Expenses"
+
+        # Styles
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        regular_font = Font(name="Calibri", size=10)
+        bold_font = Font(name="Calibri", size=10, bold=True)
+        thin_border = Border(
+            left=Side(style='thin', color='D1D5DB'),
+            right=Side(style='thin', color='D1D5DB'),
+            top=Side(style='thin', color='D1D5DB'),
+            bottom=Side(style='thin', color='D1D5DB')
+        )
+        total_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+
+        headers = ['Sr', 'Date', 'Title', 'Category', 'Cash', 'Transaction ID', 'Restaurant', 'Shop / Spare Part', 'Description', 'Amount (¥)']
+        ws.append(headers)
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = thin_border
+            if col_idx in [1, 2, 5]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_idx == len(headers):
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        total_amount = Decimal('0')
+        row_num = 2
+
+        for idx, expense in enumerate(queryset, 1):
+            spare_part_text = '-'
+            if expense.spare_part:
+                spare_part_text = expense.spare_part.name
+                if expense.spare_part.address:
+                    spare_part_text = f"{spare_part_text} - {expense.spare_part.address}"
+
+            tx_text = '-'
+            if expense.transaction:
+                tx_text = expense.transaction.transaction_id or str(expense.transaction.id)
+
+            category_name = expense.category.name if expense.category else '-'
+            restaurant_name = expense.restaurant.name if expense.restaurant else '-'
+            amount_val = float(expense.amount) if expense.amount is not None else 0.0
+            cash_text = 'Yes' if expense.is_cash else 'No'
+
+            ws.append([
+                idx,
+                str(expense.date),
+                expense.title or '',
+                category_name,
+                cash_text,
+                tx_text,
+                restaurant_name,
+                spare_part_text,
+                expense.description or '',
+                amount_val
+            ])
+
+            for col_idx in range(1, len(headers) + 1):
+                c = ws.cell(row=row_num, column=col_idx)
+                c.font = regular_font
+                c.border = thin_border
+                if col_idx in [1, 2, 5]:
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_idx == len(headers):
+                    c.alignment = Alignment(horizontal="right", vertical="center")
+                    c.number_format = '¥#,##0'
+                else:
+                    c.alignment = Alignment(horizontal="left", vertical="center")
+
+            if expense.amount:
+                total_amount += expense.amount
+            row_num += 1
+
+        # Total row
+        ws.append(['Total', '', '', '', '', '', '', '', '', float(total_amount)])
+        total_row = row_num
+        for col_idx in range(1, len(headers) + 1):
+            c = ws.cell(row=total_row, column=col_idx)
+            c.font = bold_font
+            c.fill = total_fill
+            c.border = thin_border
+            if col_idx == len(headers):
+                c.alignment = Alignment(horizontal="right", vertical="center")
+                c.number_format = '¥#,##0'
+            elif col_idx == 1:
+                c.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Set row heights
+        ws.row_dimensions[1].height = 26
+        for r in range(2, total_row + 1):
+            ws.row_dimensions[r].height = 20
+
+        # Adjust column widths
+        for col in ws.columns:
+            col_letter = get_column_letter(col[0].column)
+            max_len = 0
+            for cell in col:
+                val = str(cell.value or '')
+                max_len = max(max_len, len(val))
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f'expenses_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
         return response
 
     @action(detail=False, methods=['get'])
