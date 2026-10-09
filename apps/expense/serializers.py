@@ -54,6 +54,8 @@ class ExpenseSerializer(serializers.ModelSerializer):
                 'id': instance.transaction.id,
                 'description': instance.transaction.description,
                 'withdraw': instance.transaction.withdraw,
+                'deposit': instance.transaction.deposit,
+                'company_account': instance.transaction.company_account_id,
                 'date': instance.transaction.date
             }
         else:
