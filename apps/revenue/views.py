@@ -1316,7 +1316,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         end_date = request.query_params.get('end_date')
         payment_status = request.query_params.get('payment_status')
         search = request.query_params.get('search')
-        page_size = int(request.query_params.get('pageSize', 10))
+        page_size = int(request.query_params.get('pageSize') or request.query_params.get('page_size') or 10)
         
         today = datetime.now().date()
         
