@@ -220,7 +220,6 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     def _add_later_page_decorations(self, canvas, doc):
         self._add_page_decorations(canvas, doc, include_logo=False)
 
-
     @action(detail=True, methods=['get'])
     def generate_receipt(self, request, pk=None):
         expense = self.get_object()
@@ -260,17 +259,33 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.black))
         elements.append(Spacer(1, 15))
 
-        # Expense details
+        # Expense details with tax breakdown
+        has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
+        tax_amount = expense.tax_amount if expense.tax_amount is not None else (
+            (expense.amount * expense.tax_percent_used / Decimal('100')) if has_tax else Decimal('0')
+        )
+        total_with_tax = expense.amount + (tax_amount if has_tax else Decimal('0'))
+
         detail_data = [
             ["タイトル:", expense.title],
-            ["額:", f"¥ {expense.amount:,.0f}"],
+            ["金額 (税抜):" if has_tax else "金額:", f"¥ {expense.amount:,.0f}"],
+        ]
+
+        if has_tax:
+            detail_data.extend([
+                ["消費税率:", f"{expense.tax_percent_used:.2f}%"],
+                ["消費税額:", f"¥ {tax_amount:,.0f}"],
+                ["合計金額 (税込):", f"¥ {total_with_tax:,.0f}"],
+            ])
+
+        detail_data.extend([
             ["カテゴリ:", expense.category.name if expense.category else 'N/A'],
             ["説明:", expense.description or '-']
-        ]
+        ])
 
         if expense.transaction:
             detail_data.extend([
-                ["トランザクションID:", str(expense.transaction.transaction_id)],
+                ["トランザクションID:", str(expense.transaction.transaction_id or expense.transaction.id)],
                 ["取引:", expense.transaction.description],
                 ["取引金額:", f"¥ {expense.transaction.withdraw:,.0f}"]
             ])
@@ -281,7 +296,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             spare_part_text = expense.spare_part.name
             if expense.spare_part.address:
                 spare_part_text = f"{spare_part_text} - {expense.spare_part.address}"
-            detail_data.append(["店:", spare_part_text])
+            detail_data.append(["店 / ショップ:", spare_part_text])
 
         if expense.is_cash:
             detail_data.append(["支払方法:", "現金 (Cash)"])
@@ -348,7 +363,6 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             cat = ExpenseCategory.objects.filter(id=category).first()
             if cat:
                 left_col.append(f"カテゴリ: {cat.name}")
-        # left_col.append(f"Generated: {request.user.email}")
 
         right_col = [user.company_name, user.company_address, f"TEL/FAX: {user.company_phone}", user.business_registration]
 
@@ -364,7 +378,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         header_table.setStyle(TableStyle([
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-            ('FONTNAME', (0, 0), (-1, -1), 'HeiseiMin-W3')
+            ('FONTNAME', (2, 0), (2, -1), 'HeiseiMin-W3')
         ]))
         elements.append(header_table)
         elements.append(Spacer(1, 10))
@@ -378,8 +392,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             'TableCell',
             parent=styles['Normal'],
             fontName='HeiseiMin-W3',
-            fontSize=8,
-            leading=10,
+            fontSize=7.5,
+            leading=9.5,
             wordWrap='CJK',
         )
         right_cell_style = ParagraphStyle(
@@ -387,15 +401,27 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             parent=cell_style,
             alignment=TA_RIGHT,
         )
+        center_cell_style = ParagraphStyle(
+            'TableCellCenter',
+            parent=cell_style,
+            alignment=TA_CENTER,
+        )
 
-        table_data = [['Sr', '日付', 'タイトル', 'カテゴリ', '支払/取引', 'レストラン', 'ショップ', '額']]
-        total = 0
+        table_data = [['Sr', '日付', 'タイトル', 'カテゴリ', '支払/取引', '店/レストラン', '金額', '税率', '税額', '合計']]
+        total_base = Decimal('0')
+        total_tax = Decimal('0')
+        total_grand = Decimal('0')
+
         for idx, expense in enumerate(queryset, 1):
-            spare_part_text = '-'
-            if expense.spare_part:
-                spare_part_text = expense.spare_part.name
+            place_text = '-'
+            if expense.spare_part and expense.restaurant:
+                place_text = f"{expense.restaurant.name} / {expense.spare_part.name}"
+            elif expense.restaurant:
+                place_text = expense.restaurant.name
+            elif expense.spare_part:
+                place_text = expense.spare_part.name
                 if expense.spare_part.address:
-                    spare_part_text = f"{spare_part_text} - {expense.spare_part.address}"
+                    place_text = f"{place_text} - {expense.spare_part.address}"
 
             if expense.is_cash:
                 payment_text = '現金 (Cash)'
@@ -404,17 +430,30 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             else:
                 payment_text = '-'
 
+            has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
+            tax_rate_text = f"{expense.tax_percent_used:.1f}%" if has_tax else "-"
+            tax_amount_val = expense.tax_amount if expense.tax_amount is not None else (
+                (expense.amount * expense.tax_percent_used / Decimal('100')) if has_tax else Decimal('0')
+            )
+            tax_amount_text = f"¥ {tax_amount_val:,.0f}" if (has_tax and tax_amount_val > 0) else "-"
+            row_total = expense.amount + (tax_amount_val if has_tax else Decimal('0'))
+
             table_data.append([
                 str(idx),
                 str(expense.date),
                 Paragraph(expense.title, cell_style),
                 Paragraph(expense.category.name if expense.category else '-', cell_style),
                 Paragraph(payment_text, cell_style),
-                Paragraph(expense.restaurant.name if expense.restaurant else '-', cell_style),
-                Paragraph(spare_part_text, cell_style),
-                Paragraph(f"¥ {expense.amount:,.0f}", right_cell_style)
+                Paragraph(place_text, cell_style),
+                Paragraph(f"¥ {expense.amount:,.0f}", right_cell_style),
+                Paragraph(tax_rate_text, center_cell_style),
+                Paragraph(tax_amount_text, right_cell_style),
+                Paragraph(f"¥ {row_total:,.0f}", right_cell_style)
             ])
-            total += expense.amount
+            total_base += expense.amount
+            if has_tax:
+                total_tax += tax_amount_val
+            total_grand += row_total
 
         table_data.append([
             '',
@@ -422,25 +461,31 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             '',
             '',
             '',
-            '',
             Paragraph('合計:', cell_style),
-            Paragraph(f"¥ {total:,.0f}", right_cell_style)
+            Paragraph(f"¥ {total_base:,.0f}", right_cell_style),
+            '',
+            Paragraph(f"¥ {total_tax:,.0f}", right_cell_style),
+            Paragraph(f"¥ {total_grand:,.0f}", right_cell_style)
         ])
 
-        table = Table(table_data, colWidths=[25, 55, 90, 70, 65, 95, 85, 70])
+        table = Table(table_data, colWidths=[20, 52, 85, 52, 52, 74, 55, 38, 55, 68])
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.black),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'HeiseiMin-W3'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('FONTSIZE', (0, 0), (-1, 0), 8.5),
             ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 7.5),
             ('FONTNAME', (0, 1), (-1, -1), 'HeiseiMin-W3'),
             ('ALIGN', (0, 1), (0, -1), 'CENTER'),
-            ('ALIGN', (-1, 1), (-1, -1), 'RIGHT'),
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+            ('ALIGN', (7, 1), (7, -1), 'CENTER'),
+            ('ALIGN', (6, 1), (6, -1), 'RIGHT'),
+            ('ALIGN', (8, 1), (8, -1), 'RIGHT'),
+            ('ALIGN', (9, 1), (9, -1), 'RIGHT'),
             ('VALIGN', (0, 1), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 4),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING', (0, 0), (-1, -1), 3),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 3),
             ('BACKGROUND', (0, -1), (-1, -1), colors.lightgrey),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black)
         ]))
@@ -474,7 +519,11 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         )
         total_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
 
-        headers = ['Sr', 'Date', 'Title', 'Category', 'Cash', 'Transaction ID', 'Restaurant', 'Shop / Spare Part', 'Description', 'Amount (¥)']
+        headers = [
+            'Sr', 'Date', 'Title', 'Category', 'Cash', 'Transaction ID',
+            'Restaurant', 'Shop / Spare Part', 'Description',
+            'Amount (¥)', 'Tax Rate (%)', 'Tax Amount (¥)', 'Total Incl. Tax (¥)'
+        ]
         ws.append(headers)
 
         for col_idx in range(1, len(headers) + 1):
@@ -482,14 +531,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             cell.font = header_font
             cell.fill = header_fill
             cell.border = thin_border
-            if col_idx in [1, 2, 5]:
+            if col_idx in [1, 2, 5, 11]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_idx == len(headers):
+            elif col_idx in [10, 12, 13]:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
 
         total_amount = Decimal('0')
+        total_tax_amount = Decimal('0')
+        total_grand_amount = Decimal('0')
         row_num = 2
 
         for idx, expense in enumerate(queryset, 1):
@@ -508,6 +559,13 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             amount_val = float(expense.amount) if expense.amount is not None else 0.0
             cash_text = 'Yes' if expense.is_cash else 'No'
 
+            has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
+            tax_rate_val = float(expense.tax_percent_used) if has_tax else 0.0
+            tax_amount_val = float(expense.tax_amount) if (expense.tax_amount is not None) else (
+                round(amount_val * tax_rate_val / 100.0, 2) if has_tax else 0.0
+            )
+            total_with_tax = amount_val + tax_amount_val
+
             ws.append([
                 idx,
                 str(expense.date),
@@ -518,16 +576,19 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 restaurant_name,
                 spare_part_text,
                 expense.description or '',
-                amount_val
+                amount_val,
+                f"{tax_rate_val:.2f}%" if has_tax else "-",
+                tax_amount_val,
+                total_with_tax
             ])
 
             for col_idx in range(1, len(headers) + 1):
                 c = ws.cell(row=row_num, column=col_idx)
                 c.font = regular_font
                 c.border = thin_border
-                if col_idx in [1, 2, 5]:
+                if col_idx in [1, 2, 5, 11]:
                     c.alignment = Alignment(horizontal="center", vertical="center")
-                elif col_idx == len(headers):
+                elif col_idx in [10, 12, 13]:
                     c.alignment = Alignment(horizontal="right", vertical="center")
                     c.number_format = '¥#,##0'
                 else:
@@ -535,17 +596,20 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
             if expense.amount:
                 total_amount += expense.amount
+            if has_tax:
+                total_tax_amount += Decimal(str(tax_amount_val))
+            total_grand_amount += Decimal(str(total_with_tax))
             row_num += 1
 
         # Total row
-        ws.append(['Total', '', '', '', '', '', '', '', '', float(total_amount)])
+        ws.append(['Total', '', '', '', '', '', '', '', '', float(total_amount), '', float(total_tax_amount), float(total_grand_amount)])
         total_row = row_num
         for col_idx in range(1, len(headers) + 1):
             c = ws.cell(row=total_row, column=col_idx)
             c.font = bold_font
             c.fill = total_fill
             c.border = thin_border
-            if col_idx == len(headers):
+            if col_idx in [10, 12, 13]:
                 c.alignment = Alignment(horizontal="right", vertical="center")
                 c.number_format = '¥#,##0'
             elif col_idx == 1:
