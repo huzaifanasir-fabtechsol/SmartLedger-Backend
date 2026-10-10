@@ -23,6 +23,11 @@ class Expense(BaseModel):
     restaurant = models.ForeignKey('Restaurant', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     spare_part = models.ForeignKey('SparePart', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     is_cash = models.BooleanField(default=False)
+    # Tax tracking fields
+    tax_percent_used = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+                                           help_text="The tax rate (%) applied to this expense, if any.")
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
+                                     help_text="The calculated tax amount for this expense.")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='expenses')
 
     class Meta:

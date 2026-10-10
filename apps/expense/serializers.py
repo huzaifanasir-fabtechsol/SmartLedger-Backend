@@ -25,10 +25,16 @@ class ExpenseSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
     spare_part_name = serializers.CharField(source='spare_part.name', read_only=True)
-    
+    tax_percent_used = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+    tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+
     class Meta:
         model = Expense
-        fields = ['id', 'title', 'amount', 'description', 'date', 'category', 'category_name', 'transaction', 'restaurant', 'restaurant_name', 'spare_part', 'spare_part_name', 'is_cash', 'created_at', 'updated_at']
+        fields = [
+            'id', 'title', 'amount', 'description', 'date', 'category', 'category_name',
+            'transaction', 'restaurant', 'restaurant_name', 'spare_part', 'spare_part_name',
+            'is_cash', 'tax_percent_used', 'tax_amount', 'created_at', 'updated_at'
+        ]
         read_only_fields = ['created_at', 'updated_at']
 
     def validate(self, attrs):
