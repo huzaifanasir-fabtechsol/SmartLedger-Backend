@@ -1,11 +1,19 @@
+import re
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q
+from django.http import HttpResponse
 
 from apps.hr.models import Employee, Salary
-from apps.hr.serializers import EmployeeSerializer, SalarySerializer
+from apps.hr.serializers import (
+    EmployeeSerializer,
+    SalarySerializer,
+    SalaryCalculationSerializer
+)
+from apps.hr.payroll_calculator import calculate_japanese_payroll
+from apps.hr.payslip_generator import generate_payslip_excel, generate_payslip_pdf
 from project.pagination import CustomPageNumberPagination
 
 
@@ -82,11 +90,23 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         queryset = queryset.order_by('salary_month')
         salaries_data = SalarySerializer(queryset, many=True).data
 
-        total_leaves = sum(float(s.leaves) for s in queryset)
-        total_leave_deduction = sum(float(s.leave_deduction) for s in queryset)
-        total_allowances = sum(float(s.allowances) for s in queryset)
-        total_other_deductions = sum(float(s.other_deductions) for s in queryset)
-        total_net_amount = sum(float(s.net_amount) for s in queryset)
+        total_gross_payment = sum(float(s.gross_payment or 0) for s in queryset)
+        total_taxable_payment = sum(float(s.taxable_payment or 0) for s in queryset)
+        total_social_insurance = sum(float(s.total_social_insurance or 0) for s in queryset)
+        total_health_insurance = sum(float(s.health_insurance or 0) for s in queryset)
+        total_welfare_pension = sum(float(s.welfare_pension or 0) for s in queryset)
+        total_employment_insurance = sum(float(s.employment_insurance or 0) for s in queryset)
+        total_income_tax = sum(float(s.income_tax or 0) for s in queryset)
+        total_resident_tax = sum(float(s.resident_tax or 0) for s in queryset)
+        total_leaves = sum(float(s.leaves or 0) for s in queryset)
+        total_leave_deduction = sum(float(s.leave_deduction or 0) for s in queryset)
+        total_allowances = sum(float(s.allowances or 0) for s in queryset)
+        total_other_deductions = sum(float(s.other_deductions or 0) for s in queryset)
+        total_deductions = sum(float(s.total_deductions or 0) for s in queryset)
+        total_net_amount = sum(float(s.net_amount or 0) for s in queryset)
+        total_working_days = sum(float(s.working_days or 0) for s in queryset)
+        total_working_hours = sum(float(s.working_hours or 0) for s in queryset)
+        total_overtime_hours = sum(float(s.overtime_hours or 0) for s in queryset)
         paid_count = queryset.filter(status='paid').count()
         unpaid_count = queryset.filter(status='unpaid').count()
 
@@ -106,17 +126,28 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             'salaries': salaries_data,
             'summary': {
                 'total_records': len(salaries_data),
+                'total_gross_payment': total_gross_payment,
+                'total_taxable_payment': total_taxable_payment,
+                'total_social_insurance': total_social_insurance,
+                'total_health_insurance': total_health_insurance,
+                'total_welfare_pension': total_welfare_pension,
+                'total_employment_insurance': total_employment_insurance,
+                'total_income_tax': total_income_tax,
+                'total_resident_tax': total_resident_tax,
                 'total_leaves': total_leaves,
                 'total_leave_deduction': total_leave_deduction,
                 'total_allowances': total_allowances,
                 'total_other_deductions': total_other_deductions,
+                'total_deductions': total_deductions,
                 'total_net_amount': total_net_amount,
+                'total_working_days': total_working_days,
+                'total_working_hours': total_working_hours,
+                'total_overtime_hours': total_overtime_hours,
                 'paid_count': paid_count,
                 'unpaid_count': unpaid_count,
             }
         }
         return Response(response_data)
-
 
 
 class SalaryViewSet(viewsets.ModelViewSet):
@@ -153,3 +184,83 @@ class SalaryViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
+
+    @action(detail=False, methods=['post'], url_path='calculate')
+    def calculate(self, request):
+        """Preview salary calculations including Japan social insurance & withholding tax."""
+        calc_serializer = SalaryCalculationSerializer(data=request.data)
+        calc_serializer.is_valid(raise_exception=True)
+        data = calc_serializer.validated_data
+
+        employee_id = data.get('employee_id')
+        basic_salary = data.get('basic_salary')
+        commuting_allowance = data.get('commuting_allowance')
+        dependents = data.get('dependents_count', 0)
+        is_exempt = data.get('employment_insurance_exempt', False)
+
+        if employee_id:
+            try:
+                emp = Employee.objects.get(id=employee_id, admin=request.user)
+                if not basic_salary:
+                    basic_salary = emp.basic_salary
+                if not commuting_allowance:
+                    commuting_allowance = emp.commuting_allowance
+                if 'dependents_count' not in request.data:
+                    dependents = emp.dependents_count
+                if 'employment_insurance_exempt' not in request.data:
+                    is_exempt = emp.employment_insurance_exempt
+            except Employee.DoesNotExist:
+                return Response({'error': 'Employee not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        calc_result = calculate_japanese_payroll(
+            basic_salary=basic_salary,
+            commuting_allowance=commuting_allowance,
+            overtime_allowance=data.get('overtime_allowance', 0),
+            allowances=data.get('allowances', 0),
+            resident_tax=data.get('resident_tax', 0),
+            leave_deduction=data.get('leave_deduction', 0),
+            other_deductions=data.get('other_deductions', 0),
+            dependents_count=dependents,
+            is_employment_insurance_exempt=is_exempt,
+            custom_health_insurance=data.get('custom_health_insurance'),
+            custom_welfare_pension=data.get('custom_welfare_pension'),
+            custom_employment_insurance=data.get('custom_employment_insurance'),
+            custom_income_tax=data.get('custom_income_tax'),
+        )
+
+        return Response(calc_result)
+
+    @action(detail=True, methods=['get'], url_path='export-excel')
+    def export_excel(self, request, pk=None):
+        """Export salary slip as an Excel file matching the official Japanese template."""
+        salary = self.get_object()
+        excel_buffer = generate_payslip_excel(salary)
+
+        # Sanitize employee name for Content-Disposition header
+        emp_name = re.sub(r'[^a-zA-Z0-9_-]', '_', salary.employee.name if salary.employee else 'Employee')
+        filename = f"Pay_Slip_{emp_name}_{salary.salary_month}.xlsx"
+
+        response = HttpResponse(
+            excel_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
+    @action(detail=True, methods=['get'], url_path='export-pdf')
+    def export_pdf(self, request, pk=None):
+        """Export salary slip as a formatted PDF."""
+        salary = self.get_object()
+        pdf_buffer = generate_payslip_pdf(salary)
+
+        emp_name = re.sub(r'[^a-zA-Z0-9_-]', '_', salary.employee.name if salary.employee else 'Employee')
+        filename = f"Pay_Slip_{emp_name}_{salary.salary_month}.pdf"
+
+        response = HttpResponse(
+            pdf_buffer.getvalue(),
+            content_type='application/pdf'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
