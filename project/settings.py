@@ -12,26 +12,45 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env if present
+load_dotenv()
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
-
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-hk(26-nvi2zn__ja9i!39bhnrf1iu%#x3jrg9sjk98%b$4y*$g'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-hk(26-nvi2zn__ja9i!39bhnrf1iu%#x3jrg9sjk98%b$4y*$g')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = ['huzaifanasirfab.pythonanywhere.com', 'https://smart-ledgers.vercel.app', '127.0.0.1', 'localhost', 'testserver', '*']
+allowed_hosts_str = os.getenv('ALLOWED_HOSTS', '*')
+ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_str.split(',') if host.strip()]
 
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ['https://smart-ledgers.vercel.app']
-CORS_ALLOWED_ORIGINS = ['https://smart-ledgers.vercel.app']
-APPEND_SLASH=True
+CORS_ALLOW_ALL_ORIGINS = True
+
+csrf_trusted_env = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+if csrf_trusted_env:
+    CSRF_TRUSTED_ORIGINS = [o.strip() for o in csrf_trusted_env.split(',') if o.strip()]
+else:
+    CSRF_TRUSTED_ORIGINS = [
+        'https://smart-ledgers.vercel.app',
+        'https://api-tax-mgmnt.huzaifanasir.dev',
+        'http://api-tax-mgmnt.huzaifanasir.dev',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+    ]
+
+cors_allowed_env = os.getenv('CORS_ALLOWED_ORIGINS', '')
+if cors_allowed_env:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in cors_allowed_env.split(',') if o.strip()]
+
+APPEND_SLASH = True
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 50000
 
 # Application definition
@@ -51,7 +70,6 @@ INSTALLED_APPS += [
     "apps.revenue",
     "apps.hr",
 ]
-
 
 INSTALLED_APPS += [
     "rest_framework",
@@ -89,17 +107,27 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'project.wsgi.application'
 
-
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+if os.getenv('POSTGRES_DB') or os.getenv('DB_ENGINE') == 'django.db.backends.postgresql':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('POSTGRES_DB', 'taxmgmt_db'),
+            'USER': os.getenv('POSTGRES_USER', 'taxmgmt_user'),
+            'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'taxmgmt_pass_2026'),
+            'HOST': os.getenv('POSTGRES_HOST', 'db'),
+            'PORT': os.getenv('POSTGRES_PORT', '5432'),
+        }
     }
-}
-
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
@@ -119,7 +147,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
 
@@ -131,11 +158,11 @@ USE_I18N = True
 
 USE_TZ = True
 
-
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -151,5 +178,3 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'project.pagination.CustomPageNumberPagination',
     'PAGE_SIZE': 10,
 }
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-CORS_ALLOW_ALL_ORIGINS = True

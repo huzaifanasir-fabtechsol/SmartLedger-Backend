@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    container_name: taxmgmt_backend
+    restart: always
+    network_mode: "host"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
