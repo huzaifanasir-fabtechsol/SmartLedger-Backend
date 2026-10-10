@@ -12,6 +12,7 @@ class CarCategory(BaseModel):
         db_table = 'car_categories'
         verbose_name_plural = 'Car Categories'
         unique_together = ['company', 'model', 'user']
+        ordering = ['company', 'model', '-id']
 
     def __str__(self):
         return f"{self.company} - {self.model}"
@@ -25,6 +26,7 @@ class Car(BaseModel):
 
     class Meta: 
         db_table = 'cars'
+        ordering = ['-id']
 
     def __str__(self):
         return f"{self.category} - {self.chassis_number}"
@@ -121,6 +123,7 @@ class OrderItem(BaseModel):
 
     class Meta:
         db_table = 'order_items'
+        ordering = ['-id']
 
     def __str__(self):
         return f"{self.order.order_number} - {self.car.category}"
@@ -196,6 +199,7 @@ class Customer(BaseModel):
 
     class Meta:
         db_table = 'customers'
+        ordering = ['-id']
 
     def __str__(self):
         return self.name
@@ -213,6 +217,7 @@ class Saler(BaseModel):
 
     class Meta:
         db_table = 'salers'
+        ordering = ['-id']
 
     def __str__(self):
         return self.name
@@ -227,6 +232,7 @@ class CompanyAccount(BaseModel):
 
     class Meta:
         db_table = 'company_accounts'
+        ordering = ['-id']
 
     def __str__(self):
         return f"{self.bank_name} - {self.account_number}"
@@ -238,6 +244,7 @@ class Auction(BaseModel):
 
     class Meta:
         db_table = 'auctions'
+        ordering = ['-id']
 
     def __str__(self):
         return self.name
@@ -255,7 +262,7 @@ class Transaction(BaseModel):
 
     class Meta:
         db_table = 'transactions'
-        ordering = ['-date']
+        ordering = ['-date', '-id']
 
     def __str__(self):
         return f"{self.date} - {self.description}"

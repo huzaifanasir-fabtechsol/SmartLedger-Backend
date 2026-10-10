@@ -9,6 +9,7 @@ class ExpenseCategory(BaseModel):
     class Meta:
         db_table = 'expense_categories'
         verbose_name_plural = 'Expense Categories'
+        ordering = ['-id']
 
     def __str__(self):
         return self.name
@@ -32,7 +33,7 @@ class Expense(BaseModel):
 
     class Meta:
         db_table = 'expenses'
-        ordering = ['-date']
+        ordering = ['-date', '-id']
 
     def __str__(self):
         return f"{self.title} - {self.amount}"
@@ -45,6 +46,7 @@ class Restaurant(BaseModel):
 
     class Meta:
         db_table = 'restaurants'
+        ordering = ['-id']
 
     def __str__(self):
         return self.name
@@ -61,6 +63,7 @@ class SparePart(BaseModel):
 
     class Meta:
         db_table = 'spare_parts'
+        ordering = ['-id']
 
     def __str__(self):
         return self.name

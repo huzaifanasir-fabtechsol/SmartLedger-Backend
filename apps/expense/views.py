@@ -43,6 +43,23 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
+def _safe_parse_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    val_str = str(value).strip()
+    if not val_str:
+        return None
+    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return datetime.strptime(val_str, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
 class ExpenseViewSet(viewsets.ModelViewSet):
     serializer_class = ExpenseSerializer
     permission_classes = [IsAuthenticated]
@@ -51,7 +68,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         queryset = Expense.objects.filter(user=self.request.user)
 
         category = self.request.query_params.get('category')
-        date = self.request.query_params.get('date')
+        date_val = self.request.query_params.get('date')
         date_from = self.request.query_params.get('date_from') or self.request.query_params.get('start_date')
         date_to = self.request.query_params.get('date_to') or self.request.query_params.get('end_date')
         year = self.request.query_params.get('year')
@@ -60,12 +77,20 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         if category:
             queryset = queryset.filter(category_id=category)
-        if date:
-            queryset = queryset.filter(date=date)
+        if date_val:
+            parsed_date = _safe_parse_date(date_val)
+            if parsed_date:
+                queryset = queryset.filter(date=parsed_date)
+            else:
+                queryset = queryset.none()
         if date_from:
-            queryset = queryset.filter(date__gte=date_from)
+            parsed_from = _safe_parse_date(date_from)
+            if parsed_from:
+                queryset = queryset.filter(date__gte=parsed_from)
         if date_to:
-            queryset = queryset.filter(date__lte=date_to)
+            parsed_to = _safe_parse_date(date_to)
+            if parsed_to:
+                queryset = queryset.filter(date__lte=parsed_to)
         if year:
             try:
                 queryset = queryset.filter(date__year=int(year))
@@ -551,7 +576,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def available_transactions(self, request):
         search = request.query_params.get('search', '')
-        date = request.query_params.get('date', '')
+        date_val = request.query_params.get('date', '')
         account_id = request.query_params.get('account_id', '')
 
         queryset = Transaction.objects.filter(user=request.user)
@@ -566,10 +591,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 Q(deposit__icontains=search) |
                 Q(withdraw__icontains=search)
             )
-        if date:
-            queryset = queryset.filter(date=date)
+        if date_val:
+            parsed_date = _safe_parse_date(date_val)
+            if parsed_date:
+                queryset = queryset.filter(date=parsed_date)
+            else:
+                queryset = queryset.none()
 
-        serializer = TransactionSerializer(queryset, many=True)
+        serializer = TransactionSerializer(queryset.order_by('-date', '-id'), many=True)
         return Response(serializer.data)
 
 
