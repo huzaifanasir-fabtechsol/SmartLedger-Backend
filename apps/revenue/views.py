@@ -16,7 +16,8 @@ from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 from apps.revenue.models import Car, CarCategory, Order, OrderItem, Customer, Saler, CompanyAccount, Auction, Transaction
 from apps.revenue.serializers import CarSerializer, CarCategorySerializer, OrderSerializer, OrderItemSerializer, CreateOrderSerializer, CustomerSerializer, SalerSerializer, CompanyAccountSerializer, AuctionSerializer, TransactionSerializer
 from project.pagination import CustomPageNumberPagination
@@ -148,13 +149,16 @@ class OrderViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        queryset = Order.objects.filter(user=self.request.user).order_by('-created_at')
+        queryset = Order.objects.filter(user=self.request.user).order_by('-transaction_date', '-id')
         
         payment_status = self.request.query_params.get('payment_status')
-        transaction_type = self.request.query_params.get('transaction_type')
-        transaction_catagory = self.request.query_params.get('transaction_catagory')
-        start_date = self.request.query_params.get('start_date')
-        end_date = self.request.query_params.get('end_date')
+        transaction_type = self.request.query_params.get('transaction_type') or self.request.query_params.get('type')
+        transaction_catagory = self.request.query_params.get('transaction_catagory') or self.request.query_params.get('category')
+        start_date = self.request.query_params.get('start_date') or self.request.query_params.get('date_from')
+        end_date = self.request.query_params.get('end_date') or self.request.query_params.get('date_to')
+        year = self.request.query_params.get('year')
+        month = self.request.query_params.get('month')
+        payment_method = self.request.query_params.get('payment_method')
         search = self.request.query_params.get('search')
         
         if payment_status:
@@ -167,6 +171,26 @@ class OrderViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(transaction_date__gte=start_date)
         if end_date:
             queryset = queryset.filter(transaction_date__lte=end_date)
+        if year:
+            try:
+                queryset = queryset.filter(transaction_date__year=int(year))
+            except (ValueError, TypeError):
+                pass
+        if month:
+            try:
+                queryset = queryset.filter(transaction_date__month=int(month))
+            except (ValueError, TypeError):
+                pass
+        if payment_method:
+            pm = payment_method.strip().lower()
+            if pm == 'cash':
+                queryset = queryset.filter(
+                    Q(company_account__isnull=True) & ~Q(other_details__payment_method__iexact='bank')
+                )
+            elif pm == 'bank':
+                queryset = queryset.filter(
+                    Q(company_account__isnull=False) | Q(other_details__payment_method__iexact='bank')
+                )
         if search:
             queryset = queryset.filter(
                 Q(order_number__icontains=search) |
@@ -175,6 +199,201 @@ class OrderViewSet(viewsets.ModelViewSet):
             )
         
         return queryset
+
+    @action(detail=False, methods=['get'])
+    def tax_stats(self, request):
+        queryset = self.get_queryset()
+        items = OrderItem.objects.filter(order__in=queryset)
+        
+        fields = [
+            'vehicle_price', 'vehicle_price_tax', 'recycle_fee',
+            'listing_fee', 'listing_fee_tax', 'successful_bid', 'successful_bid_tax',
+            'commission_fee', 'commission_fee_tax', 'transport_fee', 'transport_fee_tax',
+            'registration_fee', 'registration_fee_tax', 'canceling_fee'
+        ]
+        
+        aggregations = {f: Sum(f) for f in fields}
+        agg_results = items.aggregate(**aggregations)
+        
+        stats = {
+            'total_orders': queryset.count(),
+            'total_items': items.count(),
+        }
+        for f in fields:
+            stats[f] = float(agg_results.get(f) or 0)
+            
+        return Response(stats)
+
+    @action(detail=False, methods=['get'])
+    def export_tax_xlsx(self, request):
+        queryset = self.get_queryset().prefetch_related('items', 'items__car', 'items__car__category', 'company_account')
+        
+        FIELD_CONFIG = {
+            'vehicle_price': 'Vehicle Price (¥)',
+            'vehicle_price_tax': 'Vehicle Price Tax (¥)',
+            'recycle_fee': 'Recycle Fee (¥)',
+            'listing_fee': 'Listing Fee (¥)',
+            'listing_fee_tax': 'Listing Fee Tax (¥)',
+            'successful_bid': 'Successful Bid (¥)',
+            'successful_bid_tax': 'Successful Bid Tax (¥)',
+            'commission_fee': 'Commission Fee (¥)',
+            'commission_fee_tax': 'Commission Fee Tax (¥)',
+            'transport_fee': 'Transport Fee (¥)',
+            'transport_fee_tax': 'Transport Fee Tax (¥)',
+            'registration_fee': 'Registration Fee (¥)',
+            'registration_fee_tax': 'Registration Fee Tax (¥)',
+            'canceling_fee': 'Canceling Fee (¥)',
+        }
+        
+        selected_raw = request.query_params.get('selected_fields', 'vehicle_price')
+        selected_fields = [f.strip() for f in selected_raw.split(',') if f.strip() in FIELD_CONFIG]
+        if not selected_fields:
+            selected_fields = ['vehicle_price']
+            
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Invoice Tax Report"
+        
+        title_font = Font(name="Calibri", size=14, bold=True, color="1E293B")
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        regular_font = Font(name="Calibri", size=10)
+        bold_font = Font(name="Calibri", size=10, bold=True)
+        thin_border = Border(
+            left=Side(style='thin', color='CBD5E1'),
+            right=Side(style='thin', color='CBD5E1'),
+            top=Side(style='thin', color='CBD5E1'),
+            bottom=Side(style='thin', color='CBD5E1')
+        )
+        total_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+
+        # Title Block
+        ws.append(["Invoice Tax Report"])
+        ws.cell(row=1, column=1).font = title_font
+        ws.append([f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Orders: {queryset.count()}"])
+        ws.append([])
+        
+        base_headers = ['#', 'Date', 'Order #', 'Vehicle / Chassis', 'Type', 'Category', 'Payment Status', 'Payment Method']
+        selected_headers = [FIELD_CONFIG[f] for f in selected_fields]
+        headers = base_headers + selected_headers
+        ws.append(headers)
+        header_row = 4
+        
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=header_row, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = thin_border
+            if col_idx in [1, 2, 5, 6, 7, 8]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_idx > len(base_headers):
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+                
+        totals = {f: Decimal('0') for f in selected_fields}
+        row_num = header_row + 1
+        row_idx = 1
+        
+        for order in queryset:
+            od = order.other_details or {}
+            is_cash = not order.company_account and (od.get('payment_method', '').lower() != 'bank')
+            payment_method = 'Cash' if is_cash else 'Bank'
+            t_type = (order.transaction_type or '').capitalize()
+            t_cat = (order.transaction_catagory or '').capitalize()
+            p_status = (order.payment_status or '').capitalize()
+            
+            items = list(order.items.all())
+            if not items:
+                row_data = [
+                    row_idx,
+                    str(order.transaction_date),
+                    order.order_number,
+                    '-',
+                    t_type,
+                    t_cat,
+                    p_status,
+                    payment_method
+                ] + [0.0] * len(selected_fields)
+                ws.append(row_data)
+                for col_idx in range(1, len(headers) + 1):
+                    c = ws.cell(row=row_num, column=col_idx)
+                    c.font = regular_font
+                    c.border = thin_border
+                    if col_idx > len(base_headers):
+                        c.alignment = Alignment(horizontal="right", vertical="center")
+                        c.number_format = '¥#,##0'
+                    elif col_idx in [1, 2, 5, 6, 7, 8]:
+                        c.alignment = Alignment(horizontal="center", vertical="center")
+                row_num += 1
+                row_idx += 1
+            else:
+                for item in items:
+                    v_info = []
+                    if item.car and item.car.category:
+                        v_info.append(f"{item.car.category.company} {item.car.category.model}")
+                    if item.car and item.car.chassis_number:
+                        v_info.append(item.car.chassis_number)
+                    vehicle_text = ' - '.join(v_info) if v_info else (item.venue or '-')
+                    
+                    row_data = [
+                        row_idx,
+                        str(order.transaction_date),
+                        order.order_number,
+                        vehicle_text,
+                        t_type,
+                        t_cat,
+                        p_status,
+                        payment_method
+                    ]
+                    for f in selected_fields:
+                        val = float(getattr(item, f, 0) or 0)
+                        row_data.append(val)
+                        totals[f] += Decimal(str(val))
+                        
+                    ws.append(row_data)
+                    for col_idx in range(1, len(headers) + 1):
+                        c = ws.cell(row=row_num, column=col_idx)
+                        c.font = regular_font
+                        c.border = thin_border
+                        if col_idx > len(base_headers):
+                            c.alignment = Alignment(horizontal="right", vertical="center")
+                            c.number_format = '¥#,##0'
+                        elif col_idx in [1, 2, 5, 6, 7, 8]:
+                            c.alignment = Alignment(horizontal="center", vertical="center")
+                    row_num += 1
+                    row_idx += 1
+                    
+        # Total row
+        total_row_data = ['Total', '', '', '', '', '', '', '']
+        for f in selected_fields:
+            total_row_data.append(float(totals[f]))
+        ws.append(total_row_data)
+        
+        for col_idx in range(1, len(headers) + 1):
+            c = ws.cell(row=row_num, column=col_idx)
+            c.font = bold_font
+            c.fill = total_fill
+            c.border = thin_border
+            if col_idx > len(base_headers):
+                c.alignment = Alignment(horizontal="right", vertical="center")
+                c.number_format = '¥#,##0'
+            elif col_idx == 1:
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                
+        # Set column widths
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f"Invoice_Tax_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
