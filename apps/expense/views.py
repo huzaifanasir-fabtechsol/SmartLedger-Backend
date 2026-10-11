@@ -101,11 +101,19 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 queryset = queryset.filter(date__month=int(month))
             except (ValueError, TypeError):
                 pass
-        is_cash = self.request.query_params.get('is_cash')
-        if is_cash in ['true', 'True', '1']:
+        payment_status = self.request.query_params.get('payment_status') or self.request.query_params.get('is_cash')
+        if payment_status in ['true', 'True', '1', 'cash', 'Cash']:
             queryset = queryset.filter(is_cash=True)
-        elif is_cash in ['false', 'False', '0']:
+        elif payment_status in ['false', 'False', '0', 'bank', 'Bank']:
             queryset = queryset.filter(is_cash=False)
+
+        tax_cat = self.request.query_params.get('tax_category')
+        if tax_cat:
+            if tax_cat == 'none':
+                queryset = queryset.filter(Q(tax_percent_used__isnull=True) | Q(tax_percent_used=0))
+            elif tax_cat in ['inclusive', 'exclusive']:
+                queryset = queryset.filter(tax_category=tax_cat)
+
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search) |
@@ -647,6 +655,240 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         filename = f'expenses_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
+
+    @action(detail=False, methods=['get'])
+    def tax_stats(self, request):
+        queryset = self.get_queryset()
+
+        total_original_amount = Decimal('0')
+        total_tax_paid = Decimal('0')
+        grand_total_amount = Decimal('0')
+
+        total_inclusive_amount = Decimal('0')
+        inclusive_base_amount = Decimal('0')
+        inclusive_tax_amount = Decimal('0')
+        inclusive_count = 0
+
+        total_exclusive_amount = Decimal('0')
+        exclusive_base_amount = Decimal('0')
+        exclusive_tax_amount = Decimal('0')
+        exclusive_count = 0
+
+        total_no_tax_amount = Decimal('0')
+        no_tax_count = 0
+
+        rate_buckets = {}
+
+        for exp in queryset:
+            amt = exp.amount or Decimal('0')
+            has_tax = exp.tax_percent_used is not None and exp.tax_percent_used > Decimal('0')
+            if exp.tax_amount is not None:
+                tax = exp.tax_amount
+            elif has_tax:
+                tax = (amt * exp.tax_percent_used / Decimal('100')).quantize(Decimal('0.01'))
+            else:
+                tax = Decimal('0')
+
+            tot = amt + tax
+            total_original_amount += amt
+            total_tax_paid += tax
+            grand_total_amount += tot
+
+            tax_cat = getattr(exp, 'tax_category', 'exclusive') or 'exclusive'
+
+            if not has_tax:
+                total_no_tax_amount += amt
+                no_tax_count += 1
+                rate_key = 0.0
+            else:
+                rate_key = float(exp.tax_percent_used)
+                if tax_cat == 'inclusive':
+                    total_inclusive_amount += tot
+                    inclusive_base_amount += amt
+                    inclusive_tax_amount += tax
+                    inclusive_count += 1
+                else:
+                    total_exclusive_amount += tot
+                    exclusive_base_amount += amt
+                    exclusive_tax_amount += tax
+                    exclusive_count += 1
+
+            if rate_key not in rate_buckets:
+                rate_buckets[rate_key] = {
+                    'rate': rate_key,
+                    'base_amount': Decimal('0'),
+                    'tax_amount': Decimal('0'),
+                    'total_amount': Decimal('0'),
+                    'count': 0
+                }
+            rate_buckets[rate_key]['base_amount'] += amt
+            rate_buckets[rate_key]['tax_amount'] += tax
+            rate_buckets[rate_key]['total_amount'] += tot
+            rate_buckets[rate_key]['count'] += 1
+
+        breakdown_list = []
+        for rk in sorted(rate_buckets.keys(), reverse=True):
+            b = rate_buckets[rk]
+            breakdown_list.append({
+                'rate': b['rate'],
+                'base_amount': float(b['base_amount']),
+                'tax_amount': float(b['tax_amount']),
+                'total_amount': float(b['total_amount']),
+                'count': b['count'],
+            })
+
+        return Response({
+            'total_original_amount': float(total_original_amount),
+            'total_tax_paid': float(total_tax_paid),
+            'grand_total_amount': float(grand_total_amount),
+            'total_inclusive_amount': float(total_inclusive_amount),
+            'inclusive_base_amount': float(inclusive_base_amount),
+            'inclusive_tax_amount': float(inclusive_tax_amount),
+            'inclusive_count': inclusive_count,
+            'total_exclusive_amount': float(total_exclusive_amount),
+            'exclusive_base_amount': float(exclusive_base_amount),
+            'exclusive_tax_amount': float(exclusive_tax_amount),
+            'exclusive_count': exclusive_count,
+            'total_no_tax_amount': float(total_no_tax_amount),
+            'no_tax_count': no_tax_count,
+            'expense_count': queryset.count(),
+            'tax_rate_breakdown': breakdown_list,
+        })
+
+    @action(detail=False, methods=['get'])
+    def export_tax_xlsx(self, request):
+        queryset = self.get_queryset()
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Tax Report Expenses"
+
+        # Styles
+        title_font = Font(name="Calibri", size=14, bold=True, color="1E293B")
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        regular_font = Font(name="Calibri", size=10)
+        bold_font = Font(name="Calibri", size=10, bold=True)
+        thin_border = Border(
+            left=Side(style='thin', color='CBD5E1'),
+            right=Side(style='thin', color='CBD5E1'),
+            top=Side(style='thin', color='CBD5E1'),
+            bottom=Side(style='thin', color='CBD5E1')
+        )
+        total_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+
+        # Title Block
+        ws.append(["Expense Tax Report (経費消費税レポート)"])
+        ws.cell(row=1, column=1).font = title_font
+        ws.append([f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Records: {queryset.count()}"])
+        ws.append([])
+
+        headers = [
+            'Sr', 'Date', 'Title', 'Category', 'Payment Method',
+            'Tax Category', 'Tax Rate (%)', 'Pre-Tax Amount (¥)', 'Tax Amount (¥)', 'Total Amount (¥)'
+        ]
+        ws.append(headers)
+        header_row = 4
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=header_row, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = thin_border
+            if col_idx in [1, 2, 5, 6, 7]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_idx in [8, 9, 10]:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        total_amount = Decimal('0')
+        total_tax_amount = Decimal('0')
+        total_grand_amount = Decimal('0')
+        row_num = header_row + 1
+
+        for idx, expense in enumerate(queryset, 1):
+            category_name = expense.category.name if expense.category else '-'
+            amount_val = float(expense.amount) if expense.amount is not None else 0.0
+            payment_method = 'Cash' if expense.is_cash else 'Bank'
+
+            has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
+            tax_rate_val = float(expense.tax_percent_used) if has_tax else 0.0
+            tax_amount_val = float(expense.tax_amount) if (expense.tax_amount is not None) else (
+                round(amount_val * tax_rate_val / 100.0, 2) if has_tax else 0.0
+            )
+            total_with_tax = amount_val + tax_amount_val
+
+            if has_tax:
+                tax_cat_text = 'Tax Inclusive (税込)' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive (税抜)'
+            else:
+                tax_cat_text = 'No Tax (対象外)'
+
+            ws.append([
+                idx,
+                str(expense.date),
+                expense.title or '',
+                category_name,
+                payment_method,
+                tax_cat_text,
+                f"{tax_rate_val:.2f}%" if has_tax else "-",
+                amount_val,
+                tax_amount_val,
+                total_with_tax
+            ])
+
+            for col_idx in range(1, len(headers) + 1):
+                c = ws.cell(row=row_num, column=col_idx)
+                c.font = regular_font
+                c.border = thin_border
+                if col_idx in [1, 2, 5, 6, 7]:
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_idx in [8, 9, 10]:
+                    c.alignment = Alignment(horizontal="right", vertical="center")
+                    c.number_format = '¥#,##0'
+                else:
+                    c.alignment = Alignment(horizontal="left", vertical="center")
+
+            if expense.amount:
+                total_amount += expense.amount
+            if has_tax:
+                total_tax_amount += Decimal(str(tax_amount_val))
+            total_grand_amount += Decimal(str(total_with_tax))
+            row_num += 1
+
+        # Total row at bottom
+        ws.append(['Total (合計)', '', '', '', '', '', '', float(total_amount), float(total_tax_amount), float(total_grand_amount)])
+        total_row = row_num
+        for col_idx in range(1, len(headers) + 1):
+            c = ws.cell(row=total_row, column=col_idx)
+            c.font = bold_font
+            c.fill = total_fill
+            c.border = thin_border
+            if col_idx in [8, 9, 10]:
+                c.alignment = Alignment(horizontal="right", vertical="center")
+                c.number_format = '¥#,##0'
+            elif col_idx == 1:
+                c.alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.row_dimensions[header_row].height = 26
+        for r in range(header_row + 1, total_row + 1):
+            ws.row_dimensions[r].height = 20
+
+        for col in ws.columns:
+            col_letter = get_column_letter(col[0].column)
+            max_len = 0
+            for cell in col:
+                val = str(cell.value or '')
+                max_len = max(max_len, len(val))
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f'Tax_Report_Expenses_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
         return response
