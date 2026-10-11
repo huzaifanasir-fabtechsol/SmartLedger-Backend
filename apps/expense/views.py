@@ -8,9 +8,12 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db import transaction as db_transaction
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.conf import settings
+from django.db import IntegrityError, transaction as db_transaction
 from django.db.models import Q
 from django.http import HttpResponse
+from django.utils import timezone
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -18,8 +21,12 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase import pdfmetrics
-from apps.expense.models import Expense, ExpenseCategory, Restaurant, SparePart
+from apps.expense.models import Expense, ExpenseCategory, ExpenseImportJob, Restaurant, SparePart
 from apps.expense.serializers import ExpenseSerializer, ExpenseCategorySerializer, RestaurantSerializer, SparePartSerializer
+from apps.expense.bulk_import import (
+    COLUMNS, MAX_REPORTED_ERRORS, ImportFileError, build_payload, latest_job, serialize_job,
+)
+from apps.expense.tasks import run_expense_import
 from apps.revenue.models import CompanyAccount, Transaction
 from apps.revenue.serializers import TransactionSerializer
 from apps.account.models import User
@@ -1042,6 +1049,111 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 'Provide company_account_id in the request or create a company account to allow creating new transactions.'
             )
         return Response(response_data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get', 'post'], url_path='bulk-import', parser_classes=[MultiPartParser, FormParser])
+    def bulk_import(self, request):
+        """
+        GET  -> status of the user's latest expense + transaction import.
+        POST -> validate an .xlsx (file, company_account) and queue it for import.
+        """
+        if request.method == 'GET':
+            return Response({'job': serialize_job(latest_job(request.user))})
+
+        account_id = request.data.get('company_account') or request.data.get('company_account_id')
+        if not account_id:
+            return Response({'error': 'Company account is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            company_account = CompanyAccount.objects.filter(id=account_id, user=request.user).first()
+        except (ValueError, TypeError):
+            company_account = None
+        if not company_account:
+            return Response({'error': 'Selected company account not found or access denied.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'error': 'No file uploaded. Please upload an .xlsx file.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not file_obj.name.lower().endswith('.xlsx'):
+            return Response({'error': 'Invalid file format. Please upload an Excel .xlsx file.'}, status=status.HTTP_400_BAD_REQUEST)
+        if file_obj.size > settings.EXPENSE_IMPORT_MAX_FILE_MB * 1024 * 1024:
+            return Response(
+                {'error': f'File is too large. The maximum size is {settings.EXPENSE_IMPORT_MAX_FILE_MB} MB.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        running_job = latest_job(request.user)
+        if running_job and running_job.status in ExpenseImportJob.ACTIVE_STATUSES:
+            return Response({
+                'error': 'An import is already running. Please wait for it to finish.',
+                'job': serialize_job(running_job),
+            }, status=status.HTTP_409_CONFLICT)
+
+        # Validate the whole file first. Nothing is saved unless every row is valid.
+        try:
+            payload, summary = build_payload(file_obj, request.user)
+        except ImportFileError as exc:
+            return Response({
+                'error': exc.message,
+                'total_errors': len(exc.row_errors),
+                'row_errors': exc.row_errors[:MAX_REPORTED_ERRORS],
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with db_transaction.atomic():
+                job = ExpenseImportJob.objects.create(
+                    user=request.user,
+                    company_account=company_account,
+                    file_name=file_obj.name[:255],
+                    total_rows=summary['total_rows'],
+                    payload=payload,
+                )
+        except IntegrityError:
+            # Lost a race with another upload from the same user.
+            return Response({
+                'error': 'An import is already running. Please wait for it to finish.',
+                'job': serialize_job(latest_job(request.user)),
+            }, status=status.HTTP_409_CONFLICT)
+
+        try:
+            run_expense_import.apply_async(args=[job.id], expires=settings.EXPENSE_IMPORT_STALE_AFTER, retry=False)
+        except Exception:
+            ExpenseImportJob.objects.filter(pk=job.pk, status='pending').update(
+                status='failed',
+                error='The import could not be started because the background worker is unavailable. Nothing was saved.',
+                payload=None,
+                finished_at=timezone.now(),
+            )
+            return Response(
+                {'error': 'The import could not be started right now. Nothing was saved. Please try again shortly.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        job = ExpenseImportJob.objects.defer('payload').get(pk=job.pk)
+        return Response({
+            'message': 'File validated. The import is running in the background.',
+            'job': serialize_job(job),
+            'summary': summary,
+        }, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['get'], url_path='bulk-import/template')
+    def bulk_import_template(self, request):
+        category = ExpenseCategory.objects.filter(user=request.user).values_list('name', flat=True).first() or 'OFFICE SUPPLIES'
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Expenses'
+        ws.append([label for _, label, _ in COLUMNS])
+        ws.append(['2026-01-15', 'TXN-0001', 1100, None, 'Printer paper', 'Paid by bank transfer', 'Office supplies', category, 'Inclusive', 10])
+        ws.append(['2026-01-16', 'TXN-0002', None, 50000, 'Customer payment', 'Deposit rows do not create an expense', None, None, None, None])
+        for idx in range(1, len(COLUMNS) + 1):
+            ws.cell(row=1, column=idx).font = Font(bold=True)
+            ws.column_dimensions[get_column_letter(idx)].width = 22
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = 'attachment; filename="expense_import_template.xlsx"'
+        wb.save(response)
+        return response
 
 class RestaurantViewSet(viewsets.ModelViewSet):
     serializer_class = RestaurantSerializer

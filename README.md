@@ -54,6 +54,9 @@ SmartLedger Backend is a Django REST API that powers authentication, expenses, v
 - `GET /api/expenses/{id}/generate_receipt/`
 - `GET /api/expenses/export_pdf/`
 - `POST /api/expenses/bulk-import-xls-expenses/`
+- `POST /api/expenses/bulk-import/` (expense + transaction import, see below)
+- `GET /api/expenses/bulk-import/` (status of the latest import)
+- `GET /api/expenses/bulk-import/template/`
 - `GET/POST /api/restaurants/`
 - `GET/POST /api/spare-parts/`
 
@@ -98,6 +101,38 @@ python manage.py runserver
 ```
 
 Default API URL: `http://127.0.0.1:8000`
+
+## Bulk Expense + Transaction Import
+
+`POST /api/expenses/bulk-import/` takes a multipart form with `file` (.xlsx) and `company_account`.
+
+Required columns (any order, header case ignored): Date, Transaction ID, Withdraw Amount, Deposit Amount,
+Description, Notes, Title, Category, Tax Way, Tax Rate.
+
+- Every row needs Date, Transaction ID, Description, Notes and exactly one of Withdraw / Deposit.
+- Withdraw rows also need Title, Category, Tax Way (`inclusive` / `exclusive`, any case) and Tax Rate
+  (`10`, `10%`). They create a transaction and an expense; tax is calculated like a manual expense.
+- Deposit rows create a transaction only. Their expense columns may be blank.
+- Unknown categories are created.
+
+The whole file is validated first. If anything is wrong the response is `400` with `row_errors` and
+nothing is saved. Otherwise the response is `202` and a Celery task writes everything in one database
+transaction: the import is complete or it leaves nothing behind. Rows are matched one-to-one on
+date + transaction id + amounts, so uploading the same file again creates nothing.
+
+Only one import per user can be active; a second upload returns `409`. Poll `GET /api/expenses/bulk-import/`
+for `status` (`pending`, `running`, `completed`, `failed`), `percent`, `result` and `error`.
+
+### Background worker
+
+The import needs Redis and a Celery worker. `docker compose up` starts both. Locally:
+
+```bash
+redis-server
+celery -A project worker --loglevel=info --pool=solo   # --pool=solo is only needed on Windows
+```
+
+Or set `CELERY_TASK_ALWAYS_EAGER=True` in `.env` to run imports inline with no Redis or worker.
 
 ## Create Users (Custom Commands)
 

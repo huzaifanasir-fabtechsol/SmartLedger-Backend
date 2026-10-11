@@ -178,3 +178,36 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'project.pagination.CustomPageNumberPagination',
     'PAGE_SIZE': 10,
 }
+
+# Redis (Celery broker + cache used for live import progress)
+REDIS_URL = os.getenv('REDIS_URL') or f"redis://127.0.0.1:{os.getenv('REDIS_PORT', '6379')}/0"
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+        'KEY_PREFIX': 'taxmgmt',
+    }
+}
+
+# Celery
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', REDIS_URL)
+CELERY_TASK_DEFAULT_QUEUE = 'taxmgmt'
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+# Fail fast instead of hanging the upload request when Redis is unreachable.
+CELERY_BROKER_TRANSPORT_OPTIONS = {'socket_connect_timeout': 5, 'socket_timeout': 5}
+# Set to true to run tasks inline (no Redis / worker needed) for local development.
+CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False').lower() in ('true', '1', 't')
+CELERY_TASK_EAGER_PROPAGATES = False
+
+# Bulk expense import
+EXPENSE_IMPORT_MAX_ROWS = int(os.getenv('EXPENSE_IMPORT_MAX_ROWS', '20000'))
+EXPENSE_IMPORT_MAX_FILE_MB = int(os.getenv('EXPENSE_IMPORT_MAX_FILE_MB', '10'))
+# A worker is killed after TIME_LIMIT, so a job still "running" after STALE_AFTER is dead
+# and its lock can be released safely. Keep STALE_AFTER > TIME_LIMIT.
+EXPENSE_IMPORT_TIME_LIMIT = 10 * 60
+EXPENSE_IMPORT_STALE_AFTER = 15 * 60

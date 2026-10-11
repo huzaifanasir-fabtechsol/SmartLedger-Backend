@@ -55,6 +55,44 @@ class Expense(BaseModel):
     def __str__(self):
         return f"{self.title} - {self.amount}"
 
+class ExpenseImportJob(BaseModel):
+    """One bulk expense + transaction import (xlsx upload processed by a Celery task)."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    ACTIVE_STATUSES = ('pending', 'running')
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='expense_import_jobs')
+    company_account = models.ForeignKey('revenue.CompanyAccount', on_delete=models.SET_NULL, null=True, related_name='+')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    file_name = models.CharField(max_length=255)
+    total_rows = models.PositiveIntegerField(default=0)
+    processed_rows = models.PositiveIntegerField(default=0)
+    # Validated rows waiting to be imported. Cleared as soon as the job finishes.
+    payload = models.JSONField(null=True, blank=True)
+    result = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'expense_import_jobs'
+        ordering = ['-id']
+        constraints = [
+            # The database itself guarantees a user can only have one import in flight.
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(status__in=['pending', 'running']),
+                name='one_active_expense_import_per_user',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.file_name} - {self.status}"
+
 class Restaurant(BaseModel):
     name = models.CharField(max_length=200)
     location = models.CharField(max_length=300)
