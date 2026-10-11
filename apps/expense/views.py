@@ -243,7 +243,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         # Title
         title_style = ParagraphStyle('Title', parent=styles['Normal'], fontSize=24, alignment=TA_CENTER, fontName='HeiseiMin-W3')
-        elements.append(Paragraph("経費領収書", title_style))
+        elements.append(Paragraph("Expense Receipt", title_style))
         elements.append(Spacer(1, 15))
 
         # Company info on right
@@ -276,43 +276,43 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         tax_cat = getattr(expense, 'tax_category', 'exclusive')
         if has_tax:
-            tax_cat_text = "税込 (Tax Inclusive)" if tax_cat == 'inclusive' else "税抜 (Tax Exclusive)"
+            tax_cat_text = "Tax Inclusive" if tax_cat == 'inclusive' else "Tax Exclusive"
         else:
-            tax_cat_text = "対象外 (No Tax)"
+            tax_cat_text = "No Tax"
 
         detail_data = [
-            ["タイトル:", expense.title],
-            ["税抜金額 (Base Amount):" if has_tax else "金額 (Amount):", f"¥ {expense.amount:,.0f}"],
-            ["税区分 (Tax Category):", tax_cat_text],
-            ["消費税率 (Tax Rate):", f"{expense.tax_percent_used:.2f}%" if has_tax else "-"],
-            ["消費税額 (Tax Amount):", f"¥ {tax_amount:,.0f}" if has_tax else "¥ 0"],
-            ["合計金額 (Total Incl. Tax):", f"¥ {total_with_tax:,.0f}"],
+            ["Title:", expense.title],
+            ["Base Amount:" if has_tax else "Amount:", f"¥ {expense.amount:,.0f}"],
+            ["Tax Category:", tax_cat_text],
+            ["Tax Rate:", f"{expense.tax_percent_used:.2f}%" if has_tax else "-"],
+            ["Tax Amount:", f"¥ {tax_amount:,.0f}" if has_tax else "¥ 0"],
+            ["Total (Incl. Tax):", f"¥ {total_with_tax:,.0f}"],
         ]
 
         detail_data.extend([
-            ["カテゴリ:", expense.category.name if expense.category else 'N/A'],
-            ["説明:", expense.description or '-']
+            ["Category:", expense.category.name if expense.category else 'N/A'],
+            ["Description:", expense.description or '-']
         ])
 
         if expense.transaction:
             detail_data.extend([
-                ["トランザクションID:", str(expense.transaction.transaction_id or expense.transaction.id)],
-                ["取引:", expense.transaction.description],
-                ["取引金額:", f"¥ {expense.transaction.withdraw:,.0f}"]
+                ["Transaction ID:", str(expense.transaction.transaction_id or expense.transaction.id)],
+                ["Transaction:", expense.transaction.description],
+                ["Transaction Amount:", f"¥ {expense.transaction.withdraw:,.0f}"]
             ])
 
         if expense.restaurant:
-            detail_data.append(["レストラン:", expense.restaurant.name])
+            detail_data.append(["Restaurant:", expense.restaurant.name])
         if expense.spare_part:
             spare_part_text = expense.spare_part.name
             if expense.spare_part.address:
                 spare_part_text = f"{spare_part_text} - {expense.spare_part.address}"
-            detail_data.append(["店 / ショップ:", spare_part_text])
+            detail_data.append(["Shop / Vendor:", spare_part_text])
 
         if expense.is_cash:
-            detail_data.append(["支払方法:", "現金 (Cash)"])
+            detail_data.append(["Payment Method:", "Cash"])
         elif expense.transaction:
-            detail_data.append(["支払方法:", "銀行 / 口座 (Bank / Account)"])
+            detail_data.append(["Payment Method:", "Bank / Account"])
 
         detail_table = Table(detail_data, colWidths=[doc.width * 0.3, doc.width * 0.7])
         detail_table.setStyle(TableStyle([
@@ -351,29 +351,29 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         styles = getSampleStyleSheet()
 
         # Title
-        title_style = ParagraphStyle('タイトル', parent=styles['Normal'], fontSize=24, alignment=TA_CENTER, fontName='HeiseiMin-W3')
-        elements.append(Paragraph("経費請求書", title_style))
+        title_style = ParagraphStyle('Title', parent=styles['Normal'], fontSize=24, alignment=TA_CENTER, fontName='HeiseiMin-W3')
+        elements.append(Paragraph("Expense Report", title_style))
         elements.append(Spacer(1, 15))
 
         # Header with company info and filters
         header_data = []
         left_col = []
         if date:
-            left_col.append(f"日付: {date}")
+            left_col.append(f"Date: {date}")
         elif date_from or date_to:
-            left_col.append(f"期間: {date_from or ''} ~ {date_to or ''}")
+            left_col.append(f"Period: {date_from or ''} ~ {date_to or ''}")
         elif year or month:
             parts = []
             if year:
-                parts.append(f"{year}年")
+                parts.append(f"{year}")
             if month:
-                parts.append(f"{month}月")
-            left_col.append(f"期間: {' '.join(parts)}")
+                parts.append(f"Month {month}")
+            left_col.append(f"Period: {' '.join(parts)}")
 
         if category:
             cat = ExpenseCategory.objects.filter(id=category).first()
             if cat:
-                left_col.append(f"カテゴリ: {cat.name}")
+                left_col.append(f"Category: {cat.name}")
 
         right_col = [user.company_name, user.company_address, f"TEL/FAX: {user.company_phone}", user.business_registration]
 
@@ -418,7 +418,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             alignment=TA_CENTER,
         )
 
-        table_data = [['Sr', '日付', 'タイトル', 'カテゴリ', '支払/取引', '店/レストラン', '金額(税抜)', '税区分', '税率', '税額', '合計(税込)']]
+        table_data = [['Sr', 'Date', 'Title', 'Category', 'Payment/Tx', 'Shop/Vendor', 'Pre-Tax (¥)', 'Tax Type', 'Rate', 'Tax (¥)', 'Total (¥)']]
         total_base = Decimal('0')
         total_tax = Decimal('0')
         total_grand = Decimal('0')
@@ -435,7 +435,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                     place_text = f"{place_text} - {expense.spare_part.address}"
 
             if expense.is_cash:
-                payment_text = '現金 (Cash)'
+                payment_text = 'Cash'
             elif expense.transaction:
                 payment_text = str(expense.transaction.transaction_id or '-')
             else:
@@ -443,10 +443,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
             has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
             if has_tax:
-                tax_cat_label = "税込" if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else "税抜"
+                tax_cat_label = "Inclusive" if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else "Exclusive"
                 tax_rate_text = f"{expense.tax_percent_used:.1f}%"
             else:
-                tax_cat_label = "対象外"
+                tax_cat_label = "None"
                 tax_rate_text = "-"
 
             tax_amount_val = expense.tax_amount if expense.tax_amount is not None else (
@@ -479,7 +479,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             '',
             '',
             '',
-            Paragraph('合計:', cell_style),
+            Paragraph('Total:', cell_style),
             Paragraph(f"¥ {total_base:,.0f}", right_cell_style),
             '',
             '',
@@ -583,9 +583,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             )
             total_with_tax = amount_val + tax_amount_val
             if has_tax:
-                tax_cat_text = 'Tax Inclusive (税込)' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive (税抜)'
+                tax_cat_text = 'Tax Inclusive' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive'
             else:
-                tax_cat_text = 'No Tax (対象外)'
+                tax_cat_text = 'No Tax'
 
             ws.append([
                 idx,
@@ -781,7 +781,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         total_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
 
         # Title Block
-        ws.append(["Expense Tax Report (経費消費税レポート)"])
+        ws.append(["Expense Tax Report"])
         ws.cell(row=1, column=1).font = title_font
         ws.append([f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Records: {queryset.count()}"])
         ws.append([])
@@ -823,9 +823,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             total_with_tax = amount_val + tax_amount_val
 
             if has_tax:
-                tax_cat_text = 'Tax Inclusive (税込)' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive (税抜)'
+                tax_cat_text = 'Tax Inclusive' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive'
             else:
-                tax_cat_text = 'No Tax (対象外)'
+                tax_cat_text = 'No Tax'
 
             ws.append([
                 idx,
@@ -860,7 +860,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             row_num += 1
 
         # Total row at bottom
-        ws.append(['Total (合計)', '', '', '', '', '', '', float(total_amount), float(total_tax_amount), float(total_grand_amount)])
+        ws.append(['Total', '', '', '', '', '', '', float(total_amount), float(total_tax_amount), float(total_grand_amount)])
         total_row = row_num
         for col_idx in range(1, len(headers) + 1):
             c = ws.cell(row=total_row, column=col_idx)
