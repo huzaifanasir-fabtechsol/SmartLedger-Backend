@@ -24,12 +24,29 @@ class Expense(BaseModel):
     restaurant = models.ForeignKey('Restaurant', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     spare_part = models.ForeignKey('SparePart', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     is_cash = models.BooleanField(default=False)
+    TAX_CATEGORY_CHOICES = [
+        ('exclusive', 'Tax Exclusive'),
+        ('inclusive', 'Tax Inclusive'),
+    ]
     # Tax tracking fields
+    tax_category = models.CharField(
+        max_length=20,
+        choices=TAX_CATEGORY_CHOICES,
+        default='exclusive',
+        help_text="Tax category: tax-inclusive (tax is included in the entered amount) or tax-exclusive (tax is added)."
+    )
     tax_percent_used = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
                                            help_text="The tax rate (%) applied to this expense, if any.")
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
                                      help_text="The calculated tax amount for this expense.")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='expenses')
+
+    @property
+    def total_amount(self):
+        from decimal import Decimal
+        amt = self.amount or Decimal('0')
+        tax = self.tax_amount or Decimal('0')
+        return amt + tax
 
     class Meta:
         db_table = 'expenses'

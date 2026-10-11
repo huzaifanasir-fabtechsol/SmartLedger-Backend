@@ -272,7 +272,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         ]
 
         if has_tax:
+            tax_cat_text = "税込 (Tax Inclusive)" if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else "税抜 (Tax Exclusive)"
             detail_data.extend([
+                ["税区分:", tax_cat_text],
                 ["消費税率:", f"{expense.tax_percent_used:.2f}%"],
                 ["消費税額:", f"¥ {tax_amount:,.0f}"],
                 ["合計金額 (税込):", f"¥ {total_with_tax:,.0f}"],
@@ -431,7 +433,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 payment_text = '-'
 
             has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
-            tax_rate_text = f"{expense.tax_percent_used:.1f}%" if has_tax else "-"
+            tax_cat_label = "税込" if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else "税抜"
+            tax_rate_text = f"{expense.tax_percent_used:.1f}% ({tax_cat_label})" if has_tax else "-"
             tax_amount_val = expense.tax_amount if expense.tax_amount is not None else (
                 (expense.amount * expense.tax_percent_used / Decimal('100')) if has_tax else Decimal('0')
             )
@@ -522,7 +525,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         headers = [
             'Sr', 'Date', 'Title', 'Category', 'Cash', 'Transaction ID',
             'Restaurant', 'Shop / Spare Part', 'Description',
-            'Amount (¥)', 'Tax Rate (%)', 'Tax Amount (¥)', 'Total Incl. Tax (¥)'
+            'Amount (¥)', 'Tax Category', 'Tax Rate (%)', 'Tax Amount (¥)', 'Total Incl. Tax (¥)'
         ]
         ws.append(headers)
 
@@ -531,9 +534,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             cell.font = header_font
             cell.fill = header_fill
             cell.border = thin_border
-            if col_idx in [1, 2, 5, 11]:
+            if col_idx in [1, 2, 5, 11, 12]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_idx in [10, 12, 13]:
+            elif col_idx in [10, 13, 14]:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
@@ -565,6 +568,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 round(amount_val * tax_rate_val / 100.0, 2) if has_tax else 0.0
             )
             total_with_tax = amount_val + tax_amount_val
+            tax_cat_text = '-'
+            if has_tax:
+                tax_cat_text = 'Tax Inclusive (税込)' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive (税抜)'
 
             ws.append([
                 idx,
@@ -577,6 +583,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 spare_part_text,
                 expense.description or '',
                 amount_val,
+                tax_cat_text,
                 f"{tax_rate_val:.2f}%" if has_tax else "-",
                 tax_amount_val,
                 total_with_tax
@@ -586,9 +593,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 c = ws.cell(row=row_num, column=col_idx)
                 c.font = regular_font
                 c.border = thin_border
-                if col_idx in [1, 2, 5, 11]:
+                if col_idx in [1, 2, 5, 11, 12]:
                     c.alignment = Alignment(horizontal="center", vertical="center")
-                elif col_idx in [10, 12, 13]:
+                elif col_idx in [10, 13, 14]:
                     c.alignment = Alignment(horizontal="right", vertical="center")
                     c.number_format = '¥#,##0'
                 else:
@@ -602,15 +609,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             row_num += 1
 
         # Total row
-        ws.append(['Total', '', '', '', '', '', '', '', '', float(total_amount), '', float(total_tax_amount), float(total_grand_amount)])
+        ws.append(['Total', '', '', '', '', '', '', '', '', float(total_amount), '', '', float(total_tax_amount), float(total_grand_amount)])
         total_row = row_num
         for col_idx in range(1, len(headers) + 1):
             c = ws.cell(row=total_row, column=col_idx)
             c.font = bold_font
             c.fill = total_fill
             c.border = thin_border
-            if col_idx in [10, 12, 13]:
+            if col_idx in [10, 13, 14]:
                 c.alignment = Alignment(horizontal="right", vertical="center")
+                c.number_format = '¥#,##0'
                 c.number_format = '¥#,##0'
             elif col_idx == 1:
                 c.alignment = Alignment(horizontal="center", vertical="center")
