@@ -208,11 +208,13 @@ def generate_payslip_pdf(salary) -> io.BytesIO:
     story.append(Paragraph("勤怠 (Attendance)", ParagraphStyle('SecTitle', parent=styles['Heading3'], fontSize=11)))
     story.append(Spacer(1, 4))
 
+    req_hrs_val = getattr(salary, 'required_working_hours', None) or (salary.working_days * Decimal('8.0'))
+
     att_data = [
-        ["勤務日数 (Days)", "勤務時間 (Hours)", "普通残業 (OT)", "休日残業 (Holiday)", "深夜残業 (Midnight)"],
-        [f"{salary.working_days} 日", f"{salary.working_hours} h", f"{salary.overtime_hours} h", f"{salary.holiday_overtime_hours} h", f"{salary.midnight_overtime_hours} h"],
-        ["有給日数 (Paid Leave)", "公休日数 (Off Days)", "欠勤日数 (Absence)", "遅刻・早退回数 (Late Count)", "遅刻・早退時間 (Late Hours)"],
-        [f"{salary.paid_leaves} 日", f"{salary.statutory_leaves} 日", f"{salary.absence_days} 日", f"{salary.late_early_count} 回", f"{salary.late_early_hours} h"],
+        ["所定時間 (Required)", "実働時間 (Worked)", "普通残業 (OT)", "休日残業 (Holiday)", "深夜残業 (Midnight)"],
+        [f"{req_hrs_val} h", f"{salary.working_hours} h", f"{salary.overtime_hours} h", f"{salary.holiday_overtime_hours} h", f"{salary.midnight_overtime_hours} h"],
+        ["勤務日数 (Days)", "有給日数 (Paid Leave)", "公休日数 (Off Days)", "欠勤日数 (Absence)", "遅刻・早退 (Late/Early)"],
+        [f"{salary.working_days} 日", f"{salary.paid_leaves} 日", f"{salary.statutory_leaves} 日", f"{salary.absence_days} 日", f"{salary.late_early_count}回 / {salary.late_early_hours}h"],
     ]
 
     t_att = Table(att_data, colWidths=[104, 104, 104, 104, 104])

@@ -16,6 +16,7 @@ class Employee(BaseModel):
     employment_start_month = models.DateField()
     basic_salary = models.DecimalField(max_digits=12, decimal_places=2)
     commuting_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    daily_working_hours = models.DecimalField(max_digits=4, decimal_places=2, default=8.00, help_text="Required working hours per day (所定労働時間/日)")
     dependents_count = models.IntegerField(default=0)
     employment_insurance_exempt = models.BooleanField(default=False)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
@@ -67,7 +68,8 @@ class Salary(BaseModel):
 
     # Attendance (勤怠)
     working_days = models.DecimalField(max_digits=5, decimal_places=1, default=0)  # 勤務日数
-    working_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)  # 勤務時間数
+    required_working_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0, help_text="所定労働時間数")  # 所定労働時間数
+    working_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)  # 実労働時間数
     overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)  # 普通時間外時間
     holiday_overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)  # 休日時間外時間
     midnight_overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)  # 深夜時間外時間

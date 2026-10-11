@@ -11,7 +11,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'email', 'phone', 'role', 'address',
             'employment_start_month', 'basic_salary',
-            'commuting_allowance', 'dependents_count', 'employment_insurance_exempt',
+            'commuting_allowance', 'daily_working_hours', 'dependents_count', 'employment_insurance_exempt',
             'status', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -28,6 +28,11 @@ class EmployeeSerializer(serializers.ModelSerializer):
     def validate_basic_salary(self, value):
         if value < 0:
             raise serializers.ValidationError("Basic salary cannot be negative.")
+        return value
+
+    def validate_daily_working_hours(self, value):
+        if value <= 0 or value > 24:
+            raise serializers.ValidationError("Daily working hours must be between 0.5 and 24.0.")
         return value
 
     def validate_dependents_count(self, value):
@@ -55,7 +60,7 @@ class SalarySerializer(serializers.ModelSerializer):
             # Net Payout & Status
             'net_amount', 'status',
             # Attendance
-            'leaves', 'working_days', 'working_hours', 'overtime_hours',
+            'leaves', 'working_days', 'required_working_hours', 'working_hours', 'overtime_hours',
             'holiday_overtime_hours', 'midnight_overtime_hours',
             'paid_leaves', 'statutory_leaves', 'absence_days',
             'late_early_count', 'late_early_hours',
@@ -110,6 +115,13 @@ class SalarySerializer(serializers.ModelSerializer):
         dependents = employee.dependents_count if employee else 0
         is_exempt = employee.employment_insurance_exempt if employee else False
 
+        # Attendance calculation
+        working_days = attrs.get('working_days', self.instance.working_days if self.instance else Decimal('20.0'))
+        daily_hours = getattr(employee, 'daily_working_hours', Decimal('8.0')) if employee else Decimal('8.0')
+        req_hours = (Decimal(str(working_days or 0)) * Decimal(str(daily_hours or 8.0))).quantize(Decimal('0.01'))
+        if attrs.get('required_working_hours') is None or attrs.get('required_working_hours') == Decimal('0'):
+            attrs['required_working_hours'] = req_hours
+
         # If social insurance or tax fields are not explicitly provided, calculate automatically
         calc_result = calculate_japanese_payroll(
             basic_salary=basic_salary,
@@ -125,17 +137,25 @@ class SalarySerializer(serializers.ModelSerializer):
             custom_welfare_pension=attrs.get('welfare_pension'),
             custom_employment_insurance=attrs.get('employment_insurance'),
             custom_income_tax=attrs.get('income_tax'),
+            working_days=working_days,
+            daily_working_hours=daily_hours,
+            working_hours=attrs.get('working_hours', self.instance.working_hours if self.instance else None),
+            overtime_hours=attrs.get('overtime_hours', self.instance.overtime_hours if self.instance else Decimal('0')),
+            holiday_overtime_hours=attrs.get('holiday_overtime_hours', self.instance.holiday_overtime_hours if self.instance else Decimal('0')),
+            midnight_overtime_hours=attrs.get('midnight_overtime_hours', self.instance.midnight_overtime_hours if self.instance else Decimal('0')),
+            absence_days=attrs.get('absence_days', self.instance.absence_days if self.instance else Decimal('0')),
+            late_early_hours=attrs.get('late_early_hours', self.instance.late_early_hours if self.instance else Decimal('0')),
         )
 
         for k, v in calc_result.items():
-            if k not in attrs or attrs[k] is None:
+            if k in [f.name for f in Salary._meta.fields] and (k not in attrs or attrs[k] is None):
                 attrs[k] = v
 
         return attrs
 
 
 class SalaryCalculationSerializer(serializers.Serializer):
-    """Serializer to preview salary and tax calculations before saving."""
+    """Serializer to preview salary, tax, and attendance calculations before saving."""
     employee_id = serializers.IntegerField(required=False, allow_null=True)
     basic_salary = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=Decimal('0'))
     commuting_allowance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=Decimal('0'))
@@ -150,3 +170,12 @@ class SalaryCalculationSerializer(serializers.Serializer):
     custom_welfare_pension = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     custom_employment_insurance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     custom_income_tax = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    # Attendance parameters
+    daily_working_hours = serializers.DecimalField(max_digits=4, decimal_places=2, required=False, allow_null=True)
+    working_days = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, default=Decimal('20.0'))
+    working_hours = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, allow_null=True)
+    overtime_hours = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, default=Decimal('0.0'))
+    holiday_overtime_hours = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, default=Decimal('0.0'))
+    midnight_overtime_hours = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, default=Decimal('0.0'))
+    absence_days = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, default=Decimal('0.0'))
+    late_early_hours = serializers.DecimalField(max_digits=6, decimal_places=2, required=False, default=Decimal('0.0'))

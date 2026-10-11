@@ -198,6 +198,8 @@ class SalaryViewSet(viewsets.ModelViewSet):
         dependents = data.get('dependents_count', 0)
         is_exempt = data.get('employment_insurance_exempt', False)
 
+        daily_working_hours = data.get('daily_working_hours')
+
         if employee_id:
             try:
                 emp = Employee.objects.get(id=employee_id, admin=request.user)
@@ -209,8 +211,13 @@ class SalaryViewSet(viewsets.ModelViewSet):
                     dependents = emp.dependents_count
                 if 'employment_insurance_exempt' not in request.data:
                     is_exempt = emp.employment_insurance_exempt
+                if daily_working_hours is None:
+                    daily_working_hours = getattr(emp, 'daily_working_hours', Decimal('8.0'))
             except Employee.DoesNotExist:
                 return Response({'error': 'Employee not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if daily_working_hours is None:
+            daily_working_hours = Decimal('8.0')
 
         calc_result = calculate_japanese_payroll(
             basic_salary=basic_salary,
@@ -226,6 +233,14 @@ class SalaryViewSet(viewsets.ModelViewSet):
             custom_welfare_pension=data.get('custom_welfare_pension'),
             custom_employment_insurance=data.get('custom_employment_insurance'),
             custom_income_tax=data.get('custom_income_tax'),
+            working_days=data.get('working_days', 20),
+            daily_working_hours=daily_working_hours,
+            working_hours=data.get('working_hours'),
+            overtime_hours=data.get('overtime_hours', 0),
+            holiday_overtime_hours=data.get('holiday_overtime_hours', 0),
+            midnight_overtime_hours=data.get('midnight_overtime_hours', 0),
+            absence_days=data.get('absence_days', 0),
+            late_early_hours=data.get('late_early_hours', 0),
         )
 
         return Response(calc_result)

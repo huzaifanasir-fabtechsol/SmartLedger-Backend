@@ -65,10 +65,10 @@ def get_standard_monthly_remuneration(salary: Decimal | float) -> Decimal:
     return Decimal(str(val))
 
 
-def calculate_health_insurance(standard_monthly_remuneration: Decimal, rate: Decimal = Decimal('0.05015')) -> Decimal:
+def calculate_health_insurance(standard_monthly_remuneration: Decimal, rate: Decimal = Decimal('0.0499')) -> Decimal:
     """
     Calculate employee share of Health Insurance (健康保険料).
-    Default employee rate is ~5.015% (e.g. Kyokai Kenpo Tokyo ~10.03% total / 2).
+    Kyokai Kenpo Tokyo standard rate is 9.98% total, split equally (4.99% employee share).
     """
     return round_jpy(standard_monthly_remuneration * rate)
 
@@ -76,17 +76,73 @@ def calculate_health_insurance(standard_monthly_remuneration: Decimal, rate: Dec
 def calculate_welfare_pension(standard_monthly_remuneration: Decimal, rate: Decimal = Decimal('0.0915')) -> Decimal:
     """
     Calculate employee share of Welfare Pension (厚生年金保険料).
-    Standard rate is 18.3% split equally (9.15% employee share).
+    Standard statutory rate is 18.3% split equally (9.15% employee share).
     """
     return round_jpy(standard_monthly_remuneration * rate)
 
 
-def calculate_employment_insurance(gross_taxable: Decimal, rate: Decimal = Decimal('0.006')) -> Decimal:
+def calculate_employment_insurance(gross_wages: Decimal, rate: Decimal = Decimal('0.006')) -> Decimal:
     """
     Calculate employee share of Employment Insurance (雇用保険料).
-    General business rate is 6/1000 (0.6%).
+    MHLW general business rate is 6/1000 (0.60% employee share) on gross wages.
     """
-    return round_jpy(gross_taxable * rate)
+    return round_jpy(gross_wages * rate)
+
+
+def calculate_attendance_and_overtime(
+    basic_salary: Decimal | float | int = 0,
+    working_days: Decimal | float | int = 20,
+    daily_working_hours: Decimal | float | int = 8.0,
+    working_hours: Decimal | float | int | None = None,
+    overtime_hours: Decimal | float | int = 0,
+    holiday_overtime_hours: Decimal | float | int = 0,
+    midnight_overtime_hours: Decimal | float | int = 0,
+    absence_days: Decimal | float | int = 0,
+    late_early_hours: Decimal | float | int = 0,
+) -> dict:
+    """
+    Japanese Labor Standards Act Attendance & Overtime Calculation.
+    - Required Hours = working_days * daily_working_hours
+    - Hourly Wage = basic_salary / required_hours
+    - Regular Overtime: 1.25x statutory minimum premium
+    - Holiday Overtime: 1.35x statutory premium
+    - Midnight Overtime (22:00-05:00): +0.25x premium
+    - Absence Deduction: absence_days * daily_working_hours * hourly_wage
+    - Late/Early Departure Deduction: late_early_hours * hourly_wage
+    """
+    days = Decimal(str(working_days or 0))
+    daily_hrs = Decimal(str(daily_working_hours or 8.0))
+    required_hrs = (days * daily_hrs).quantize(Decimal('0.01'))
+
+    salary = Decimal(str(basic_salary or 0))
+    hourly_wage = (salary / required_hrs).quantize(Decimal('0.01')) if required_hrs > Decimal('0') else Decimal('0')
+
+    ot_hrs = Decimal(str(overtime_hours or 0))
+    hol_hrs = Decimal(str(holiday_overtime_hours or 0))
+    mid_hrs = Decimal(str(midnight_overtime_hours or 0))
+    abs_days = Decimal(str(absence_days or 0))
+    late_hrs = Decimal(str(late_early_hours or 0))
+
+    regular_ot_pay = round_jpy(hourly_wage * Decimal('1.25') * ot_hrs)
+    holiday_ot_pay = round_jpy(hourly_wage * Decimal('1.35') * hol_hrs)
+    midnight_ot_pay = round_jpy(hourly_wage * Decimal('0.25') * mid_hrs)
+    calculated_overtime_allowance = regular_ot_pay + holiday_ot_pay + midnight_ot_pay
+
+    absence_deduction = round_jpy(abs_days * daily_hrs * hourly_wage)
+    late_early_deduction = round_jpy(late_hrs * hourly_wage)
+    calculated_leave_deduction = absence_deduction + late_early_deduction
+
+    return {
+        'required_working_hours': required_hrs,
+        'hourly_wage': hourly_wage,
+        'regular_overtime_pay': regular_ot_pay,
+        'holiday_overtime_pay': holiday_ot_pay,
+        'midnight_overtime_pay': midnight_ot_pay,
+        'calculated_overtime_allowance': calculated_overtime_allowance,
+        'absence_deduction': absence_deduction,
+        'late_early_deduction': late_early_deduction,
+        'calculated_leave_deduction': calculated_leave_deduction,
+    }
 
 
 # Japanese National Tax Agency (NTA) Monthly Withholding Tax Table (給与所得の源泉徴収税額表 - 甲欄)
@@ -230,9 +286,19 @@ def calculate_japanese_payroll(
     custom_welfare_pension: Decimal | float | int | None = None,
     custom_employment_insurance: Decimal | float | int | None = None,
     custom_income_tax: Decimal | float | int | None = None,
+    # Attendance parameters
+    working_days: Decimal | float | int = 20,
+    daily_working_hours: Decimal | float | int = 8.0,
+    working_hours: Decimal | float | int | None = None,
+    overtime_hours: Decimal | float | int = 0,
+    holiday_overtime_hours: Decimal | float | int = 0,
+    midnight_overtime_hours: Decimal | float | int = 0,
+    absence_days: Decimal | float | int = 0,
+    late_early_hours: Decimal | float | int = 0,
 ) -> dict:
     """
     Complete Japanese Payroll calculation matching Pay Slip standard.
+    Includes social insurance, withholding income tax, and attendance-based required hours/overtime/deductions.
     """
     basic_salary = Decimal(str(basic_salary or 0))
     commuting_allowance = Decimal(str(commuting_allowance or 0))
@@ -241,6 +307,19 @@ def calculate_japanese_payroll(
     resident_tax = Decimal(str(resident_tax or 0))
     leave_deduction = Decimal(str(leave_deduction or 0))
     other_deductions = Decimal(str(other_deductions or 0))
+
+    # Attendance calculations
+    attendance_calc = calculate_attendance_and_overtime(
+        basic_salary=basic_salary,
+        working_days=working_days,
+        daily_working_hours=daily_working_hours,
+        working_hours=working_hours,
+        overtime_hours=overtime_hours,
+        holiday_overtime_hours=holiday_overtime_hours,
+        midnight_overtime_hours=midnight_overtime_hours,
+        absence_days=absence_days,
+        late_early_hours=late_early_hours,
+    )
 
     # 1. Taxable payment (課税支給額)
     taxable_payment = max(Decimal('0'), basic_salary + overtime_allowance + allowances - leave_deduction)
@@ -266,7 +345,8 @@ def calculate_japanese_payroll(
     elif is_employment_insurance_exempt:
         employment_insurance = Decimal('0')
     else:
-        employment_insurance = calculate_employment_insurance(taxable_payment)
+        # In Japan, Employment Insurance is calculated on gross wages (including commuting)
+        employment_insurance = calculate_employment_insurance(gross_payment)
 
     total_social_insurance = health_insurance + welfare_pension + employment_insurance
 
@@ -303,4 +383,14 @@ def calculate_japanese_payroll(
         'other_deductions': other_deductions,
         'total_deductions': total_deductions,
         'net_amount': net_amount,
+        # Attendance & Overtime calculations
+        'required_working_hours': attendance_calc['required_working_hours'],
+        'hourly_wage': attendance_calc['hourly_wage'],
+        'regular_overtime_pay': attendance_calc['regular_overtime_pay'],
+        'holiday_overtime_pay': attendance_calc['holiday_overtime_pay'],
+        'midnight_overtime_pay': attendance_calc['midnight_overtime_pay'],
+        'calculated_overtime_allowance': attendance_calc['calculated_overtime_allowance'],
+        'absence_deduction': attendance_calc['absence_deduction'],
+        'late_early_deduction': attendance_calc['late_early_deduction'],
+        'calculated_leave_deduction': attendance_calc['calculated_leave_deduction'],
     }
