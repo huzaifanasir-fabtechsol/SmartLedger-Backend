@@ -1144,6 +1144,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         ws.append([label for _, label, _ in COLUMNS])
         ws.append(['2026-01-15', 'TXN-0001', 1100, None, 'Printer paper', 'Paid by bank transfer', 'Office supplies', category, 'Inclusive', 10])
         ws.append(['2026-01-16', 'TXN-0002', None, 50000, 'Customer payment', 'Deposit rows do not create an expense', None, None, None, None])
+        ws.append(['2026-01-17', 'TXN-0003', 1200, None, 'Custom', 'Paid', 'Office supplies', category, 'Exclusive', 8])
+
         for idx in range(1, len(COLUMNS) + 1):
             ws.cell(row=1, column=idx).font = Font(bold=True)
             ws.column_dimensions[get_column_letter(idx)].width = 22
