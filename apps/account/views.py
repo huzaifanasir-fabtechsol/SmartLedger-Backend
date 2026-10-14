@@ -2,8 +2,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework import status
-from apps.account.serializers import LoginSerializer, UserSerializer, TaxRateSerializer
-from apps.account.models import TaxRate
+from apps.account.serializers import LoginSerializer, UserSerializer, TaxRateSerializer, LetterheadSerializer
+from apps.account.models import TaxRate, Letterhead
 from rest_framework import generics, permissions, viewsets
 from .serializers import UserProfileSerializer
 
@@ -37,6 +37,17 @@ class TaxRateViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return TaxRate.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class LetterheadViewSet(viewsets.ModelViewSet):
+    serializer_class = LetterheadSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Letterhead.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

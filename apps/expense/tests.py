@@ -312,11 +312,62 @@ class BulkImportTests(TestCase):
             user=self.user, company_account=self.account, date=date(2026, 1, 15), transaction_id='TXN-1',
             withdraw=1100, deposit=0, balance=0, description='Printer paper',
         )
-        Expense.objects.create(user=self.user, title='Manual', amount=1100, date=date(2026, 1, 15), transaction=tx)
+        manual = Expense.objects.create(user=self.user, title='Manual', amount=1100, date=date(2026, 1, 15), transaction=tx)
         job = self.run_import([withdraw_row(tx_id='TXN-1', amount=1100)])
         self.assertEqual(job.result['expenses_created'], 1)
-        self.assertEqual(len(job.result['warnings']), 1)
-        self.assertIn('Row 2', job.result['warnings'][0])
+        self.assertEqual(job.result['warnings'], [
+            f"Row 2: transaction 'TXN-1' already had expense #{manual.id} 'Manual' 1,100.00 "
+            f"(no category, 2026-01-15). Added expense 'Paper' 1,000.00 + tax 100.00 (Office, 2026-01-15). "
+            f"If they are the same charge, delete one of them."
+        ])
+
+    def test_review_lists_transactions_that_now_have_several_expenses(self):
+        tx = Transaction.objects.create(
+            user=self.user, company_account=self.account, date=date(2026, 1, 15), transaction_id='TXN-1',
+            withdraw=1100, deposit=0, balance=0, description='Printer paper',
+        )
+        old = Expense.objects.create(user=self.user, title='ETC', amount=1100, date=date(2026, 1, 10), transaction=tx)
+        # TXN-2 is reused but had no expense; TXN-3 is new. Neither needs review.
+        Transaction.objects.create(
+            user=self.user, company_account=self.account, date=date(2026, 1, 15), transaction_id='TXN-2',
+            withdraw=300, deposit=0, balance=0, description='Lunch',
+        )
+        job = self.run_import([
+            withdraw_row(tx_id='TXN-1', amount=1100),
+            withdraw_row(tx_id='TXN-2', amount=300, description='Lunch'),
+            withdraw_row(tx_id='TXN-3', amount=500, description='Stamp'),
+        ])
+
+        with self.assertNumQueries(2):
+            bulk_import.review_transactions(job)
+
+        response = self.client.get(URL + 'review/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['job_id'], job.id)
+        [reviewed] = response.data['transactions']
+        self.assertEqual((reviewed['id'], reviewed['transaction_id'], reviewed['withdraw']), (tx.id, 'TXN-1', Decimal('1100.00')))
+        added = Expense.objects.get(transaction=tx, title='Paper')
+        self.assertEqual(
+            [(e['id'], e['title'], e['category'], e['total_amount'], e['from_this_import']) for e in reviewed['expenses']],
+            [(old.id, 'ETC', None, Decimal('1100.00'), False),
+             (added.id, 'Paper', 'Office', Decimal('1100.00'), True)],
+        )
+
+        # Deleting the duplicate through the normal expense API resolves the review item.
+        self.assertEqual(self.client.delete(f'/api/expenses/{old.id}/').status_code, 204)
+        self.assertEqual(self.client.get(URL + 'review/').data['transactions'], [])
+        self.assertEqual(self.client.get(URL + f'review/?job={job.id}').data['transactions'], [])
+
+    def test_review_is_scoped_to_the_user_and_finished_jobs(self):
+        self.assertEqual(self.client.get(URL + 'review/').data, {'job_id': None, 'transactions': []})
+        self.assertEqual(self.client.get(URL + 'review/?job=abc').status_code, 404)
+
+        other = User.objects.create_user(username='other', email='other@example.com', password='x')
+        foreign_job = ExpenseImportJob.objects.create(user=other, file_name='x.xlsx', status='completed')
+        self.assertEqual(self.client.get(URL + f'review/?job={foreign_job.id}').status_code, 404)
+
+        pending = self.upload([withdraw_row()]).data['job']
+        self.assertEqual(self.client.get(URL + f"review/?job={pending['id']}").data['transactions'], [])
 
     def test_large_file_spanning_many_chunks_stays_query_efficient(self):
         rows = [withdraw_row(tx_id=f'TXN-{i}', amount=100 + i, category=f'Cat {i % 3}') for i in range(1200)]
@@ -486,5 +537,6 @@ class BulkImportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         template = SimpleUploadedFile('template.xlsx', response.content)
         payload, summary = bulk_import.build_payload(template, self.user)
-        self.assertEqual(summary['total_rows'], 2)
-        self.assertEqual(summary['expense_rows'], 1)
+        self.assertEqual(summary['total_rows'], 3)
+        self.assertEqual(summary['expense_rows'], 2)
+        self.assertEqual(summary['deposit_rows'], 1)

@@ -20,6 +20,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from django.conf import settings
 from django.core.cache import cache
 from django.db import IntegrityError, connection, transaction as db_transaction
+from django.db.models import Count, Prefetch
 from django.utils import timezone
 from openpyxl import load_workbook
 
@@ -491,6 +492,11 @@ def _recalculate_balances(user_id, account_id, from_date):
         Transaction.objects.bulk_update(updates, ['balance'], batch_size=CHUNK_SIZE)
 
 
+def _describe_expense(title, amount, tax_amount, category_name, expense_date):
+    money = f'{amount:,}' + (f' + tax {tax_amount:,}' if tax_amount else '')
+    return f"'{title}' {money} ({category_name or 'no category'}, {expense_date.isoformat()})"
+
+
 def run_import(job, on_progress=None):
     """
     Write job.payload. Must be called inside a transaction; raises on any inconsistency so the
@@ -564,14 +570,17 @@ def run_import(job, on_progress=None):
         # Only an already existing transaction can already carry this expense.
         reused_ids = [ref for row, ref in matched if row['expense'] and isinstance(ref, int)]
         existing_expenses = set()
-        transactions_with_expenses = set()
+        linked_by_transaction = defaultdict(list)   # transaction id -> descriptions of its expenses
         if reused_ids:
-            linked = Expense.objects.filter(user_id=user_id, transaction_id__in=reused_ids).values_list(
-                'transaction_id', 'date', 'amount', 'description', 'category_id'
+            linked = Expense.objects.filter(user_id=user_id, transaction_id__in=reused_ids).order_by('id').values_list(
+                'transaction_id', 'date', 'amount', 'description', 'category_id',
+                'id', 'title', 'tax_amount', 'category__name',
             )
-            for tx_pk, exp_date, amount, description, category_id in linked:
+            for tx_pk, exp_date, amount, description, category_id, pk, title, tax_amount, category_name in linked:
                 existing_expenses.add((tx_pk, exp_date, amount, (description or '').strip(), category_id))
-                transactions_with_expenses.add(tx_pk)
+                linked_by_transaction[tx_pk].append(
+                    f"#{pk} {_describe_expense(title, amount, tax_amount, category_name, exp_date)}"
+                )
 
         new_expenses = []
         for row, ref in matched:
@@ -587,10 +596,15 @@ def run_import(job, on_progress=None):
             if (tx_pk, row['date'], amount, row['description'], category_id) in existing_expenses:
                 counts['expenses_existing'] += 1
                 continue
-            if tx_pk in transactions_with_expenses and len(warnings) < MAX_REPORTED_WARNINGS:
+            if tx_pk in linked_by_transaction and len(warnings) < MAX_REPORTED_WARNINGS:
+                tax_amount = Decimal(expense['tax_amount']) if expense['tax_amount'] is not None else None
+                added = _describe_expense(
+                    expense['title'], amount, tax_amount, job.payload['categories'][expense['category']], row['date']
+                )
                 warnings.append(
-                    f"Row {row['row']}: transaction '{row['transaction_id']}' already had a different "
-                    f"expense linked; a new expense was added to it."
+                    f"Row {row['row']}: transaction '{row['transaction_id']}' already had expense "
+                    f"{'; '.join(linked_by_transaction[tx_pk][:3])}. Added expense {added}. "
+                    f"If they are the same charge, delete one of them."
                 )
             new_expenses.append(Expense(
                 user_id=user_id,
@@ -688,6 +702,61 @@ def latest_job(user):
         )
         job = jobs.first()
     return job
+
+
+MAX_REVIEW_TRANSACTIONS = 200
+
+
+def review_transactions(job):
+    """
+    Transactions this import added an expense to that now carry more than one expense,
+    each with all of its linked expenses. Read live, so a deleted expense drops out and a
+    transaction left with a single expense is no longer listed.
+    """
+    if job is None or job.status != 'completed' or not job.started_at or not job.finished_at:
+        return []
+
+    # Expenses written by the job: the whole import runs between started_at and finished_at.
+    imported = Expense.objects.filter(
+        user_id=job.user_id, transaction__isnull=False,
+        created_at__gte=job.started_at, created_at__lte=job.finished_at,
+    )
+    transactions = list(
+        Transaction.objects.filter(user_id=job.user_id, id__in=imported.values('transaction_id'))
+        .annotate(expense_count=Count('expenses'))
+        .filter(expense_count__gt=1)
+        .order_by('date', 'id')
+        .prefetch_related(Prefetch(
+            'expenses', queryset=Expense.objects.select_related('category').order_by('id')
+        ))[:MAX_REVIEW_TRANSACTIONS]
+    )
+
+    def from_this_import(expense):
+        return job.started_at <= expense.created_at <= job.finished_at
+
+    return [{
+        'id': tx.id,
+        'transaction_id': tx.transaction_id,
+        'date': tx.date,
+        'withdraw': tx.withdraw,
+        'deposit': tx.deposit,
+        'description': tx.description,
+        'notes': tx.notes,
+        'expenses': [{
+            'id': expense.id,
+            'date': expense.date,
+            'title': expense.title,
+            'description': expense.description,
+            'category': expense.category.name if expense.category else None,
+            'amount': expense.amount,
+            'tax_amount': expense.tax_amount,
+            'total_amount': expense.total_amount,
+            'tax_category': expense.tax_category,
+            'tax_percent_used': expense.tax_percent_used,
+            'created_at': expense.created_at,
+            'from_this_import': from_this_import(expense),
+        } for expense in tx.expenses.all()],
+    } for tx in transactions]
 
 
 def serialize_job(job):

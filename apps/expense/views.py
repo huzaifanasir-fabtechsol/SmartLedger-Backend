@@ -24,7 +24,7 @@ from reportlab.pdfbase import pdfmetrics
 from apps.expense.models import Expense, ExpenseCategory, ExpenseImportJob, Restaurant, SparePart
 from apps.expense.serializers import ExpenseSerializer, ExpenseCategorySerializer, RestaurantSerializer, SparePartSerializer
 from apps.expense.bulk_import import (
-    COLUMNS, MAX_REPORTED_ERRORS, ImportFileError, build_payload, latest_job, serialize_job,
+    COLUMNS, MAX_REPORTED_ERRORS, ImportFileError, build_payload, latest_job, review_transactions, serialize_job,
 )
 from apps.expense.tasks import run_expense_import
 from apps.revenue.models import CompanyAccount, Transaction
@@ -1133,6 +1133,22 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             'job': serialize_job(job),
             'summary': summary,
         }, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['get'], url_path='bulk-import/review')
+    def bulk_import_review(self, request):
+        """Transactions from an import (?job=<id>, default latest) that now have more than one expense."""
+        jobs = ExpenseImportJob.objects.filter(user=request.user).defer('payload')
+        job_id = request.query_params.get('job')
+        if job_id:
+            try:
+                job = jobs.filter(pk=int(job_id)).first()
+            except (TypeError, ValueError):
+                job = None
+            if not job:
+                return Response({'error': 'Import not found.'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            job = jobs.order_by('-id').first()
+        return Response({'job_id': job.id if job else None, 'transactions': review_transactions(job)})
 
     @action(detail=False, methods=['get'], url_path='bulk-import/template')
     def bulk_import_template(self, request):

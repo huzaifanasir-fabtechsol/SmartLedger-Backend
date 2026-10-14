@@ -42,3 +42,33 @@ class TaxRate(BaseModel):
     def __str__(self):
         return f"{self.name} ({self.rate}%)"
 
+
+class Letterhead(BaseModel):
+    """A saved company letterhead design (details, template and colors) owned by a user."""
+    TEMPLATES = [
+        ('angles', 'Angles'),
+        ('chevron', 'Chevron'),
+        ('wave', 'Wave'),
+        ('corner', 'Corner Cut'),
+        ('classic', 'Classic Bars'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='letterheads')
+    name = models.CharField(max_length=250)  # company name, shown in the saved list
+    logo = models.TextField(blank=True, default='')  # data: URL of the (already downscaled) logo
+    tagline = models.CharField(max_length=250, blank=True, default='')
+    address = models.TextField(blank=True, default='')
+    phone = models.CharField(max_length=250, blank=True, default='')
+    email = models.CharField(max_length=250, blank=True, default='')
+    website = models.CharField(max_length=250, blank=True, default='')
+    registration = models.CharField(max_length=250, blank=True, default='')
+    template = models.CharField(max_length=20, choices=TEMPLATES, default='angles')
+    color1 = models.CharField(max_length=7, default='#1e3a8a')
+    color2 = models.CharField(max_length=7, default='#3b82f6')
+    show_date = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'letterheads'
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return self.name

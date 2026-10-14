@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from apps.account.models import User, TaxRate
+import re
+from apps.account.models import User, TaxRate, Letterhead
 from django.contrib.auth.password_validation import validate_password
 
 class TaxRateSerializer(serializers.ModelSerializer):
@@ -15,6 +16,42 @@ class TaxRateSerializer(serializers.ModelSerializer):
         if value > 100:
             raise serializers.ValidationError("Tax rate cannot exceed 100%.")
         return value
+
+class LetterheadSerializer(serializers.ModelSerializer):
+    MAX_LOGO_CHARS = 2_000_000  # the frontend downscales logos; this only stops abuse
+
+    class Meta:
+        model = Letterhead
+        fields = [
+            'id', 'name', 'logo', 'tagline', 'address', 'phone', 'email', 'website',
+            'registration', 'template', 'color1', 'color2', 'show_date', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Company name is required.")
+        return value
+
+    def validate_logo(self, value):
+        if value and not value.startswith('data:image/'):
+            raise serializers.ValidationError("Logo must be an image.")
+        if len(value) > self.MAX_LOGO_CHARS:
+            raise serializers.ValidationError("Logo is too large.")
+        return value
+
+    def _validate_color(self, value):
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value):
+            raise serializers.ValidationError("Use a hex color like #1e3a8a.")
+        return value
+
+    def validate_color1(self, value):
+        return self._validate_color(value)
+
+    def validate_color2(self, value):
+        return self._validate_color(value)
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:

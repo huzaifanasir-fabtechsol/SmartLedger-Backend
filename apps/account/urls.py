@@ -1,9 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from apps.account.views import LoginView, LogoutView, UserProfileView, TaxRateViewSet
+from apps.account.views import LoginView, LogoutView, UserProfileView, TaxRateViewSet, LetterheadViewSet
 
 router = DefaultRouter()
 router.register('tax-rates', TaxRateViewSet, basename='tax-rate')
+router.register('letterheads', LetterheadViewSet, basename='letterhead')
 
 urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
