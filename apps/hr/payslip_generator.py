@@ -209,7 +209,7 @@ def _build_payslip_excel(salary) -> io.BytesIO:
         ["所定時間 (Required)", "実働時間 (Worked)", "普通残業 (OT)", "休日残業 (Holiday)", "深夜残業 (Midnight)"],
         [f"{req} h", f"{salary.working_hours} h", f"{salary.overtime_hours} h", f"{salary.holiday_overtime_hours} h", f"{salary.midnight_overtime_hours} h"],
         ["勤務日数 (Days)", "有給日数 (Paid Leave)", "公休日数 (Off Days)", "欠勤日数 (Absence)", "遅刻・早退 (Late/Early)"],
-        [f"{salary.working_days} 日", f"{salary.paid_leaves} 日", f"{salary.statutory_leaves} 日", f"{salary.absence_days} 日", f"{salary.late_early_count}回 / {salary.late_early_hours}h"],
+        [f"{salary.working_days} days", f"{salary.paid_leaves} days", f"{salary.statutory_leaves} days", f"{salary.absence_days} days", f"{salary.late_early_count} times / {salary.late_early_hours}h"],
     ]
     # Attendance uses 4 data columns wide layout: wrap into A-D plus E
     ws.column_dimensions['E'].width = 24
@@ -234,6 +234,26 @@ def _build_payslip_excel(salary) -> io.BytesIO:
     wb.save(output)
     output.seek(0)
     return output
+
+
+def _add_watermark(canvas, doc, text="Ilyas Sons 合同会社"):
+    """Tiled diagonal watermark, same style as the invoice PDFs."""
+    canvas.saveState()
+    canvas.setFont(JP_FONT, 60)
+    canvas.setFillColor(colors.lightgrey)
+    canvas.setFillAlpha(0.12)
+
+    width, height = doc.pagesize
+    x_spacing = width / 3
+    y_spacing = height / 4
+    for i in range(3):
+        for j in range(4):
+            canvas.saveState()
+            canvas.translate(x_spacing * (i + 0.5), y_spacing * (j + 0.5))
+            canvas.rotate(45)
+            canvas.drawCentredString(0, 0, text)
+            canvas.restoreState()
+    canvas.restoreState()
 
 
 def generate_payslip_pdf(salary) -> io.BytesIO:
@@ -336,7 +356,7 @@ def generate_payslip_pdf(salary) -> io.BytesIO:
         ["所定時間 (Required)", "実働時間 (Worked)", "普通残業 (OT)", "休日残業 (Holiday)", "深夜残業 (Midnight)"],
         [f"{req_hrs_val} h", f"{salary.working_hours} h", f"{salary.overtime_hours} h", f"{salary.holiday_overtime_hours} h", f"{salary.midnight_overtime_hours} h"],
         ["勤務日数 (Days)", "有給日数 (Paid Leave)", "公休日数 (Off Days)", "欠勤日数 (Absence)", "遅刻・早退 (Late/Early)"],
-        [f"{salary.working_days} 日", f"{salary.paid_leaves} 日", f"{salary.statutory_leaves} 日", f"{salary.absence_days} 日", f"{salary.late_early_count}回 / {salary.late_early_hours}h"],
+        [f"{salary.working_days} days", f"{salary.paid_leaves} days", f"{salary.statutory_leaves} days", f"{salary.absence_days} days", f"{salary.late_early_count} times / {salary.late_early_hours}h"],
     ]
 
     t_att = Table(att_data, colWidths=[104, 104, 104, 104, 104])
@@ -354,6 +374,6 @@ def generate_payslip_pdf(salary) -> io.BytesIO:
         story.append(Spacer(1, 10))
         story.append(Paragraph(f"<b>備考 (Remarks):</b> {salary.remarks}", sub_style))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_add_watermark, onLaterPages=_add_watermark)
     buffer.seek(0)
     return buffer
