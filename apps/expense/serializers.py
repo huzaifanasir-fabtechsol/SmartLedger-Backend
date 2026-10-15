@@ -35,7 +35,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'amount', 'description', 'date', 'category', 'category_name',
             'transaction', 'restaurant', 'restaurant_name', 'spare_part', 'spare_part_name',
-            'is_cash', 'tax_category', 'tax_percent_used', 'tax_amount', 'total_amount', 'created_at', 'updated_at'
+            'is_cash', 'is_highlighted', 'tax_category', 'tax_percent_used', 'tax_amount', 'total_amount', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at', 'total_amount']
 

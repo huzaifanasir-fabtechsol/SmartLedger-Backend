@@ -163,6 +163,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         if payment_status:
             queryset = queryset.filter(payment_status=payment_status)
+        if self.request.query_params.get('is_highlighted') in ['true', 'True', '1']:
+            queryset = queryset.filter(is_highlighted=True)
         if transaction_type:
             queryset = queryset.filter(transaction_type=transaction_type)
         if transaction_catagory:
@@ -726,6 +728,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 transaction_catagory=data['transaction_catagory'],
                 transaction_date=data['transaction_date'],
                 payment_status=data['payment_status'],
+                is_highlighted=data.get('is_highlighted', False),
                 notes=data.get('notes', ''),
                 customer=customer if data['transaction_type'] in ['sale', 'auction', 'nagare'] else None,
                 saler=saler if data['transaction_type'] == 'purchase' else None,
@@ -830,6 +833,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             order.transaction_catagory = data['transaction_catagory']
             order.transaction_date = data['transaction_date']
             order.payment_status = data['payment_status']
+            if 'is_highlighted' in data:
+                order.is_highlighted = data['is_highlighted']
             order.notes = data.get('notes', '')
             order.customer = customer if data['transaction_type'] in ['sale', 'auction', 'nagare'] else None
             order.saler = saler if data['transaction_type'] == 'purchase' else None
@@ -956,6 +961,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 transaction_catagory=data['transaction_catagory'],
                 transaction_date=data['transaction_date'],
                 payment_status=data['payment_status'],
+                is_highlighted=data.get('is_highlighted', False),
                 notes=data.get('notes', ''),
                 customer=customer if data['transaction_type'] in ['sale', 'auction'] else None,
                 saler=saler if data['transaction_type'] == 'purchase' else None,

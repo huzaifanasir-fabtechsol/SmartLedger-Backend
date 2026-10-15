@@ -66,7 +66,7 @@ class OrderSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Order
-        fields = ['id', 'order_number', 'transaction_type', 'transaction_catagory', 'transaction_date', 'payment_status', 'customer_name', 
+        fields = ['id', 'order_number', 'transaction_type', 'transaction_catagory', 'transaction_date', 'payment_status', 'is_highlighted', 'customer_name', 
                   'total_amount', 'notes', 'items', 'other_details', 'auction', 'auction_name', 
                   'customer', 'customer_name_obj', 'saler', 'saler_name_obj', 'company_account', 'company_account_name',
                   'transaction', 'created_at', 'updated_at']
@@ -88,6 +88,7 @@ class CreateOrderSerializer(serializers.Serializer):
     transaction_type = serializers.ChoiceField(choices=['purchase', 'sale', 'auction', 'nagare'])
     transaction_catagory = serializers.ChoiceField(choices=['local', 'foreign'])
     payment_status = serializers.ChoiceField(choices=['pending', 'completed', 'failed'])
+    is_highlighted = serializers.BooleanField(required=False)
     transaction_date = serializers.DateField()
     customer_id = serializers.IntegerField(required=False, allow_null=True)
     saler_id = serializers.IntegerField(required=False, allow_null=True)

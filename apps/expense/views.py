@@ -114,6 +114,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         elif payment_status in ['false', 'False', '0', 'bank', 'Bank']:
             queryset = queryset.filter(is_cash=False)
 
+        if self.request.query_params.get('is_highlighted') in ['true', 'True', '1']:
+            queryset = queryset.filter(is_highlighted=True)
+
         tax_cat = self.request.query_params.get('tax_category')
         if tax_cat:
             if tax_cat == 'none':

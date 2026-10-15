@@ -24,6 +24,7 @@ class Expense(BaseModel):
     restaurant = models.ForeignKey('Restaurant', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     spare_part = models.ForeignKey('SparePart', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     is_cash = models.BooleanField(default=False)
+    is_highlighted = models.BooleanField(default=False)
     TAX_CATEGORY_CHOICES = [
         ('exclusive', 'Tax Exclusive'),
         ('inclusive', 'Tax Inclusive'),

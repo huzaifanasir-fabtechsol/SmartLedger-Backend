@@ -50,6 +50,7 @@ class Order(BaseModel):
         ('failed', 'Failed'),
     ]
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUSES, blank=True, default='pending')
+    is_highlighted = models.BooleanField(default=False)
     order_number = models.CharField(max_length=50, unique=True)
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
     transaction_catagory = models.CharField(max_length=20, choices=TRANSACTION_CATAGORY)
