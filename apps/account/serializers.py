@@ -54,9 +54,14 @@ class LetterheadSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    has_lock_pin = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'tax_rate']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'tax_rate', 'has_lock_pin']
+
+    def get_has_lock_pin(self, obj):
+        return bool(obj.lock_pin)
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
