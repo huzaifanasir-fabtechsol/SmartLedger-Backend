@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -13,7 +14,7 @@ from apps.hr.serializers import (
     SalaryCalculationSerializer
 )
 from apps.hr.payroll_calculator import calculate_japanese_payroll
-from apps.hr.payslip_generator import generate_payslip_excel, generate_payslip_pdf
+from apps.hr.payslip_generator import generate_payslip_excel, generate_payslip_pdf, generate_payslip_docx
 from project.pagination import CustomPageNumberPagination
 
 
@@ -275,6 +276,23 @@ class SalaryViewSet(viewsets.ModelViewSet):
         response = HttpResponse(
             pdf_buffer.getvalue(),
             content_type='application/pdf'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
+    @action(detail=True, methods=['get'], url_path='export-docx')
+    def export_docx(self, request, pk=None):
+        """Export salary slip as an editable Microsoft Word (.docx) document."""
+        salary = self.get_object()
+        docx_buffer = generate_payslip_docx(salary)
+
+        emp_name = re.sub(r'[^a-zA-Z0-9_-]', '_', salary.employee.name if salary.employee else 'Employee')
+        filename = f"Pay_Slip_{emp_name}_{salary.salary_month}.docx"
+
+        response = HttpResponse(
+            docx_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         response['X-Content-Type-Options'] = 'nosniff'

@@ -11,6 +11,8 @@ from datetime import datetime
 import openpyxl
 import openpyxl.worksheet.properties
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 from django.conf import settings
 
 from reportlab.lib.pagesizes import A4, landscape
@@ -377,3 +379,273 @@ def generate_payslip_pdf(salary) -> io.BytesIO:
     doc.build(story, onFirstPage=_add_watermark, onLaterPages=_add_watermark)
     buffer.seek(0)
     return buffer
+
+
+def _set_cell_bg(cell, hex_color: str):
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{hex_color}"/>')
+    tcPr.append(shd)
+
+
+def _set_cell_borders(cell, color="CCCCCC", sz="4"):
+    tcPr = cell._tc.get_or_add_tcPr()
+    borders = parse_xml(
+        f'<w:tcBorders {nsdecls("w")}>'
+        f'<w:top w:val="single" w:sz="{sz}" w:space="0" w:color="{color}"/>'
+        f'<w:left w:val="single" w:sz="{sz}" w:space="0" w:color="{color}"/>'
+        f'<w:bottom w:val="single" w:sz="{sz}" w:space="0" w:color="{color}"/>'
+        f'<w:right w:val="single" w:sz="{sz}" w:space="0" w:color="{color}"/>'
+        f'</w:tcBorders>'
+    )
+    tcPr.append(borders)
+
+
+def generate_payslip_docx(salary) -> io.BytesIO:
+    """
+    Generate an editable Microsoft Word (.docx) payslip document matching
+    the Japanese salary payment statement layout (給与支払明細書).
+    """
+    import docx
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    doc = docx.Document()
+
+    # Set margins
+    for section in doc.sections:
+        section.top_margin = Inches(0.55)
+        section.bottom_margin = Inches(0.55)
+        section.left_margin = Inches(0.65)
+        section.right_margin = Inches(0.65)
+
+    def num(v):
+        try:
+            return f"¥{int(round(float(v or 0))):,}"
+        except Exception:
+            return "¥0"
+
+    admin_user = salary.admin
+    company_name = (
+        getattr(admin_user, 'company_name', None) or
+        getattr(admin_user, 'first_name', '') or
+        'ILYAS SONS 合同会社'
+    )
+    emp_name = salary.employee.name if salary.employee else 'Employee'
+    emp_role = salary.employee.role if salary.employee and salary.employee.role else '-'
+
+    try:
+        parts = salary.salary_month.split('-')
+        year_str = parts[0]
+        month_str = parts[1]
+        period_title = f"{year_str}年 {month_str}月 給与支払明細書"
+        period_sub = f"Salary Payment Statement ({salary.salary_month})"
+    except Exception:
+        period_title = f"{salary.salary_month} 給与支払明細書"
+        period_sub = f"Salary Payment Statement ({salary.salary_month})"
+
+    p_date = str(salary.payment_date) if salary.payment_date else salary.salary_month
+
+    # 1. Main Title
+    p_title = doc.add_paragraph()
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_title.paragraph_format.space_before = Pt(0)
+    p_title.paragraph_format.space_after = Pt(1)
+    run_title = p_title.add_run(period_title)
+    run_title.font.name = 'Arial'
+    run_title.font.size = Pt(16)
+    run_title.font.bold = True
+    run_title.font.color.rgb = RGBColor(15, 23, 42)
+
+    p_sub = doc.add_paragraph()
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_sub.paragraph_format.space_before = Pt(0)
+    p_sub.paragraph_format.space_after = Pt(10)
+    run_sub = p_sub.add_run(period_sub)
+    run_sub.font.name = 'Arial'
+    run_sub.font.size = Pt(9)
+    run_sub.font.color.rgb = RGBColor(100, 116, 139)
+
+    # 2. Company & Employee Info Block
+    meta_table = doc.add_table(rows=2, cols=2)
+    meta_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    meta_table.autofit = False
+
+    meta_rows = [
+        [(f"会社名 (Company): {company_name}", True), (f"支給日 (Payment Date): {p_date}", False)],
+        [(f"氏名 (Employee): {emp_name} 様", True), (f"役職/所属 (Role/Dept): {emp_role}", False)]
+    ]
+    for r_idx, row_data in enumerate(meta_rows):
+        for c_idx, (text, is_bold) in enumerate(row_data):
+            cell = meta_table.cell(r_idx, c_idx)
+            cell.width = Inches(3.55)
+            _set_cell_borders(cell, color="CBD5E1", sz="4")
+            _set_cell_bg(cell, "F8FAFC")
+            p = cell.paragraphs[0]
+            p.paragraph_format.space_before = Pt(2.5)
+            p.paragraph_format.space_after = Pt(2.5)
+            run = p.add_run(text)
+            run.font.name = 'Arial'
+            run.font.size = Pt(9)
+            run.font.bold = is_bold
+            run.font.color.rgb = RGBColor(30, 41, 59)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # 3. Highlighted Net Pay Callout Box
+    net_table = doc.add_table(rows=1, cols=1)
+    net_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    net_cell = net_table.cell(0, 0)
+    net_cell.width = Inches(7.1)
+    _set_cell_bg(net_cell, "0F172A")
+    _set_cell_borders(net_cell, color="0F172A", sz="6")
+    np = net_cell.paragraphs[0]
+    np.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    np.paragraph_format.space_before = Pt(5)
+    np.paragraph_format.space_after = Pt(5)
+
+    n_lbl = np.add_run("差引支給額 (Net Take-Home Pay):   ")
+    n_lbl.font.name = 'Arial'
+    n_lbl.font.size = Pt(11)
+    n_lbl.font.bold = True
+    n_lbl.font.color.rgb = RGBColor(203, 213, 225)
+
+    n_val = np.add_run(num(salary.net_amount))
+    n_val.font.name = 'Arial'
+    n_val.font.size = Pt(15)
+    n_val.font.bold = True
+    n_val.font.color.rgb = RGBColor(52, 211, 153)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 4. Earnings and Deductions Table
+    rows_data = [
+        ("支給項目 (Earnings)", "金額 (JPY)", "控除項目 (Deductions)", "金額 (JPY)", True, False, False),
+        ("基本給 (Base Salary)", num(salary.basic_salary), "健康保険料 (Health Insurance)", num(salary.health_insurance), False, False, False),
+        ("残業手当 (Overtime Pay)", num(salary.overtime_allowance), "厚生年金 (Welfare Pension)", num(salary.welfare_pension), False, False, False),
+        ("その他手当 (Allowances)", num(salary.allowances), "雇用保険 (Employment Insurance)", num(salary.employment_insurance), False, False, False),
+        ("非課税通勤費 (Commuting)", num(salary.commuting_allowance), "社会保険計 (Total Social Insurance)", num(salary.total_social_insurance), False, False, False),
+        ("課税支給額 (Taxable Gross)", num(salary.taxable_payment), "所得税 (Income Tax)", num(salary.income_tax), False, False, False),
+        ("", "", "住民税 (Resident Tax)", num(salary.resident_tax) if float(salary.resident_tax or 0) > 0 else "-", False, False, False),
+        ("", "", "欠勤・不就労控除 (Leave Ded.)", num(salary.leave_deduction) if float(salary.leave_deduction or 0) > 0 else "-", False, False, False),
+        ("", "", "その他控除 (Other Deductions)", num(salary.other_deductions) if float(salary.other_deductions or 0) > 0 else "-", False, False, False),
+        ("支給合計 (Total Gross)", num(salary.gross_payment), "控除合計 (Total Deductions)", num(salary.total_deductions), False, True, False),
+        ("差引支給額 (Net Pay)", num(salary.net_amount), "", "", False, False, True),
+    ]
+
+    main_table = doc.add_table(rows=len(rows_data), cols=4)
+    main_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    main_table.autofit = False
+
+    col_widths = [Inches(2.15), Inches(1.4), Inches(2.15), Inches(1.4)]
+
+    for r_idx, (e_item, e_val, d_item, d_val, is_head, is_tot, is_net) in enumerate(rows_data):
+        cells = [main_table.cell(r_idx, i) for i in range(4)]
+        for i, c in enumerate(cells):
+            c.width = col_widths[i]
+            _set_cell_borders(c, color="CCCCCC", sz="4")
+
+        # Shading
+        if is_head:
+            _set_cell_bg(cells[0], "EBF3FB")
+            _set_cell_bg(cells[1], "EBF3FB")
+            _set_cell_bg(cells[2], "FBEBEB")
+            _set_cell_bg(cells[3], "FBEBEB")
+        elif is_tot:
+            _set_cell_bg(cells[0], "DCE9F6")
+            _set_cell_bg(cells[1], "DCE9F6")
+            _set_cell_bg(cells[2], "F9DFDF")
+            _set_cell_bg(cells[3], "F9DFDF")
+        elif is_net:
+            _set_cell_bg(cells[0], "D0E4A9")
+            _set_cell_bg(cells[1], "D0E4A9")
+            _set_cell_bg(cells[2], "FFFFFF")
+            _set_cell_bg(cells[3], "FFFFFF")
+        else:
+            _set_cell_bg(cells[0], "FFFFFF")
+            _set_cell_bg(cells[1], "FFFFFF")
+            _set_cell_bg(cells[2], "FFFFFF")
+            _set_cell_bg(cells[3], "FFFFFF")
+
+        cell_values = [
+            (cells[0], e_item, False, is_head or is_tot or is_net),
+            (cells[1], e_val, True, is_head or is_tot or is_net),
+            (cells[2], d_item, False, is_head or is_tot),
+            (cells[3], d_val, True, is_head or is_tot)
+        ]
+
+        for c, text, is_right, is_bold in cell_values:
+            p = c.paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if is_right else WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(2.5)
+            p.paragraph_format.space_after = Pt(2.5)
+            run = p.add_run(text)
+            run.font.name = 'Arial'
+            run.font.size = Pt(8.5) if not (is_head or is_tot or is_net) else Pt(9)
+            run.font.bold = is_bold
+            if is_tot or is_net:
+                run.font.color.rgb = RGBColor(15, 23, 42)
+            else:
+                run.font.color.rgb = RGBColor(30, 41, 59)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 5. Attendance Table
+    p_att_title = doc.add_paragraph()
+    p_att_title.paragraph_format.space_before = Pt(3)
+    p_att_title.paragraph_format.space_after = Pt(2)
+    run_att = p_att_title.add_run("勤怠明細 (Attendance Summary)")
+    run_att.font.name = 'Arial'
+    run_att.font.size = Pt(10)
+    run_att.font.bold = True
+    run_att.font.color.rgb = RGBColor(15, 23, 42)
+
+    req_hrs = getattr(salary, 'required_working_hours', None) or (salary.working_days * Decimal('8.0'))
+
+    att_rows = [
+        ["所定時間 (Required)", "実働時間 (Worked)", "普通残業 (OT)", "休日残業 (Holiday)", "深夜残業 (Midnight)"],
+        [f"{req_hrs} h", f"{salary.working_hours} h", f"{salary.overtime_hours} h", f"{salary.holiday_overtime_hours} h", f"{salary.midnight_overtime_hours} h"],
+        ["勤務日数 (Days)", "有給日数 (Paid Leave)", "公休日数 (Off Days)", "欠勤日数 (Absence)", "遅刻・早退 (Late/Early)"],
+        [f"{salary.working_days} days", f"{salary.paid_leaves} days", f"{salary.statutory_leaves} days", f"{salary.absence_days} days", f"{salary.late_early_count} times ({salary.late_early_hours}h)"]
+    ]
+
+    att_table = doc.add_table(rows=4, cols=5)
+    att_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    att_table.autofit = False
+
+    for r_idx, row in enumerate(att_rows):
+        is_h = (r_idx % 2 == 0)
+        for c_idx, val in enumerate(row):
+            c = att_table.cell(r_idx, c_idx)
+            c.width = Inches(1.42)
+            _set_cell_borders(c, color="CCCCCC", sz="4")
+            _set_cell_bg(c, "F1F5F9" if is_h else "FFFFFF")
+            p = c.paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after = Pt(2)
+            run = p.add_run(val)
+            run.font.name = 'Arial'
+            run.font.size = Pt(8.5)
+            run.font.bold = is_h
+            run.font.color.rgb = RGBColor(30, 41, 59)
+
+    # 6. Remarks if present
+    if salary.remarks:
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        p_rem = doc.add_paragraph()
+        p_rem.paragraph_format.space_before = Pt(2)
+        p_rem.paragraph_format.space_after = Pt(2)
+        r_lbl = p_rem.add_run("備考 (Remarks): ")
+        r_lbl.font.name = 'Arial'
+        r_lbl.font.size = Pt(9)
+        r_lbl.font.bold = True
+        r_txt = p_rem.add_run(str(salary.remarks))
+        r_txt.font.name = 'Arial'
+        r_txt.font.size = Pt(9)
+
+    output = io.BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output
+
