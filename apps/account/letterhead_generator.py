@@ -13,7 +13,6 @@ from datetime import datetime
 import docx
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 from PIL import Image, ImageDraw
@@ -76,20 +75,6 @@ def _hex_to_rgb(hex_str: str, default=(30, 58, 138)) -> RGBColor:
         return RGBColor(r, g, b)
     except Exception:
         return RGBColor(*default)
-
-
-def _set_cell_no_borders(cell):
-    """Remove borders from a table cell."""
-    tcPr = cell._tc.get_or_add_tcPr()
-    borders = parse_xml(
-        f'<w:tcBorders {nsdecls("w")}>'
-        f'<w:top w:val="none"/>'
-        f'<w:left w:val="none"/>'
-        f'<w:bottom w:val="none"/>'
-        f'<w:right w:val="none"/>'
-        f'</w:tcBorders>'
-    )
-    tcPr.append(borders)
 
 
 def render_template_artwork(template: str, c1_hex: str, c2_hex: str) -> io.BytesIO:
@@ -162,7 +147,8 @@ def render_template_artwork(template: str, c1_hex: str, c2_hex: str) -> io.Bytes
 def _attach_background_artwork(section, artwork_buf: io.BytesIO):
     """
     Attach full-page background artwork to the section header anchored behind document text.
-    Uses wp:anchor behindDoc="1" relativeFrom="page" spanning 8.27 x 11.69 inches.
+    Fully compliant with ECMA-376 OpenXML schema: includes wp:docPr and wp:cNvGraphicFramePr
+    to ensure Microsoft Word desktop opens the document without any XML validation errors.
     """
     header = section.header
     p_h = header.paragraphs[0]
@@ -173,9 +159,12 @@ def _attach_background_artwork(section, artwork_buf: io.BytesIO):
 
     drawing = run_art._r.xpath('.//w:drawing')[0]
     inline = drawing.xpath('.//wp:inline')[0]
+
+    # Preserve schema elements in mandatory OpenXML order
+    docPr = inline.xpath('.//wp:docPr')[0]
+    cNvGraphicFramePr = inline.xpath('.//wp:cNvGraphicFramePr')[0]
     graphic = inline.xpath('.//a:graphic')[0]
 
-    # Full page extent in EMUs for 8.27 x 11.69 inches
     cx = 7562850
     cy = 10693400
 
@@ -188,6 +177,8 @@ def _attach_background_artwork(section, artwork_buf: io.BytesIO):
   <wp:wrapNone/>
 </wp:anchor>'''
     anchor = parse_xml(anchor_xml)
+    anchor.append(docPr)
+    anchor.append(cNvGraphicFramePr)
     anchor.append(graphic)
     drawing.replace(inline, anchor)
 
@@ -266,14 +257,30 @@ def generate_letterhead_docx(source) -> io.BytesIO:
 
     # 2. Decode Logo if present
     logo_bytes = None
+    logo_w_in = 0.0
+    logo_h_in = 0.0
     if logo and isinstance(logo, str) and 'base64,' in logo:
         try:
             _, b64_part = logo.split('base64,', 1)
-            logo_bytes = base64.b64decode(b64_part)
+            raw = base64.b64decode(b64_part)
+            with Image.open(io.BytesIO(raw)) as pil_img:
+                img_w, img_h = pil_img.size
+                if img_w > 0 and img_h > 0:
+                    aspect = img_w / float(img_h)
+                    max_h = 0.85
+                    max_w = 2.16
+                    if max_h * aspect <= max_w:
+                        logo_h_in = max_h
+                        logo_w_in = max_h * aspect
+                    else:
+                        logo_w_in = max_w
+                        logo_h_in = max_w / aspect
+                    logo_bytes = raw
         except Exception:
             logo_bytes = None
 
     # 3. Header Branding Section (Logo + Company Name + Tagline)
+    # NO TABLES ARE USED: avoids all table borders, gridlines, and table formatting boxes in Word
     if is_centered:
         if logo_bytes:
             p_logo = doc.add_paragraph()
@@ -281,7 +288,7 @@ def generate_letterhead_docx(source) -> io.BytesIO:
             p_logo.paragraph_format.space_before = Pt(0)
             p_logo.paragraph_format.space_after = Pt(4)
             r_img = p_logo.add_run()
-            r_img.add_picture(io.BytesIO(logo_bytes), height=Inches(0.8))
+            r_img.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_w_in), height=Inches(logo_h_in))
 
         p_name = doc.add_paragraph()
         p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -307,39 +314,50 @@ def generate_letterhead_docx(source) -> io.BytesIO:
     else:
         # Left-Aligned Layout
         if logo_bytes:
-            head_table = doc.add_table(rows=1, cols=2)
-            head_table.alignment = WD_TABLE_ALIGNMENT.LEFT
-            head_table.autofit = False
+            # Floating anchored image with text wrapping to the right
+            # Completely eliminates table borders and gridlines!
+            p_name = doc.add_paragraph()
+            p_name.paragraph_format.space_before = Pt(0)
+            p_name.paragraph_format.space_after = Pt(2)
 
-            c_logo = head_table.cell(0, 0)
-            c_logo.width = Inches(1.8)
-            _set_cell_no_borders(c_logo)
-            c_logo.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-            p_l = c_logo.paragraphs[0]
-            p_l.paragraph_format.space_before = Pt(0)
-            p_l.paragraph_format.space_after = Pt(0)
-            r_img = p_l.add_run()
-            r_img.add_picture(io.BytesIO(logo_bytes), height=Inches(0.85))
+            r_logo = p_name.add_run()
+            r_logo.add_picture(io.BytesIO(logo_bytes), width=Inches(logo_w_in), height=Inches(logo_h_in))
 
-            c_text = head_table.cell(0, 1)
-            c_text.width = Inches(5.0)
-            _set_cell_no_borders(c_text)
-            c_text.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            drawing = r_logo._r.xpath('.//w:drawing')[0]
+            inline = drawing.xpath('.//wp:inline')[0]
+            docPr = inline.xpath('.//wp:docPr')[0]
+            cNvGraphicFramePr = inline.xpath('.//wp:cNvGraphicFramePr')[0]
+            graphic = inline.xpath('.//a:graphic')[0]
 
-            p_n = c_text.paragraphs[0]
-            p_n.paragraph_format.space_before = Pt(0)
-            p_n.paragraph_format.space_after = Pt(2)
-            r_name = p_n.add_run(company_name)
+            logo_cx = int(logo_w_in * 914400)
+            logo_cy = int(logo_h_in * 914400)
+            dist_r = int(0.18 * 914400)  # ~13pt / 4.5mm horizontal gap
+
+            anchor_xml = f'''<wp:anchor {nsdecls("wp")} distT="0" distB="0" distL="0" distR="{dist_r}" simplePos="0" relativeHeight="251658241" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="0">
+  <wp:simplePos x="0" y="0"/>
+  <wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>
+  <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+  <wp:extent cx="{logo_cx}" cy="{logo_cy}"/>
+  <wp:effectExtent l="0" t="0" r="0" b="0"/>
+  <wp:wrapSquare wrapText="right"/>
+</wp:anchor>'''
+            anchor = parse_xml(anchor_xml)
+            anchor.append(docPr)
+            anchor.append(cNvGraphicFramePr)
+            anchor.append(graphic)
+            drawing.replace(inline, anchor)
+
+            r_name = p_name.add_run(company_name)
             r_name.font.name = 'Segoe UI'
             r_name.font.size = Pt(22)
             r_name.font.bold = True
             r_name.font.color.rgb = c1_rgb
 
             if tagline:
-                p_t = c_text.add_paragraph()
-                p_t.paragraph_format.space_before = Pt(0)
-                p_t.paragraph_format.space_after = Pt(0)
-                r_tag = p_t.add_run(tagline.upper())
+                p_tag = doc.add_paragraph()
+                p_tag.paragraph_format.space_before = Pt(0)
+                p_tag.paragraph_format.space_after = Pt(14)
+                r_tag = p_tag.add_run(tagline.upper())
                 r_tag.font.name = 'Segoe UI'
                 r_tag.font.size = Pt(8.5)
                 r_tag.font.color.rgb = RGBColor(107, 114, 128)
@@ -367,7 +385,11 @@ def generate_letterhead_docx(source) -> io.BytesIO:
     # 4. Clean, Blank Editable Body Canvas
     # Only a blank paragraph with standard body typography ready for user writing
     p_body = doc.add_paragraph()
-    p_body.paragraph_format.space_before = Pt(14)
+    if logo_bytes and not is_centered:
+        clearance_pt = max(14, int((logo_h_in * 72) - 34))
+        p_body.paragraph_format.space_before = Pt(clearance_pt)
+    else:
+        p_body.paragraph_format.space_before = Pt(14)
     p_body.paragraph_format.space_after = Pt(6)
     p_body.paragraph_format.line_spacing = 1.15
     r_body = p_body.add_run()
