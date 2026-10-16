@@ -22,6 +22,8 @@ class User(AbstractUser):
     business_registration = models.CharField(max_length=250, blank=True, null=True)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=10.00, blank=True, null=True)
     role = models.CharField(max_length=50, choices=USER_ROLES, default='admin')
+    # Hashed 6-digit PIN used by the Ctrl+Q screen lock; empty when no PIN is set.
+    lock_pin = models.CharField(max_length=128, blank=True, default='')
 
     
     class Meta:

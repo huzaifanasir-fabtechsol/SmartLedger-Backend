@@ -92,3 +92,25 @@ class LetterheadApiTests(APITestCase):
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         )
         self.assertIn('My_Saved_Letterhead', res['Content-Disposition'])
+
+
+from django.test import TestCase as _LockTestCase
+from rest_framework.test import APIClient as _LockClient
+
+
+class LockPinTests(_LockTestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='u', email='u@x.com', password='Str0ng-Pass!')
+        self.client = _LockClient()
+        self.client.force_authenticate(self.user)
+
+    def test_set_verify_remove(self):
+        url = '/api/account/lock-pin/'
+        self.assertEqual(self.client.post(url, {'pin': '123456'}, format='json').status_code, 400)
+        self.assertEqual(self.client.put(url, {'pin': '123456', 'password': 'wrong'}, format='json').status_code, 400)
+        self.assertEqual(self.client.put(url, {'pin': '12345', 'password': 'Str0ng-Pass!'}, format='json').status_code, 400)
+        self.assertEqual(self.client.put(url, {'pin': '123456', 'password': 'Str0ng-Pass!'}, format='json').status_code, 200)
+        self.assertTrue(self.client.get('/api/account/profile/').json()['has_lock_pin'])
+        self.assertEqual(self.client.post(url, {'pin': '000000'}, format='json').status_code, 400)
+        self.assertEqual(self.client.post(url, {'pin': '123456'}, format='json').status_code, 200)
+        self.assertEqual(self.client.delete(url, {'password': 'Str0ng-Pass!'}, format='json').status_code, 200)

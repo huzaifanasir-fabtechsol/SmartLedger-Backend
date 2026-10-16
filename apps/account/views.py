@@ -9,6 +9,7 @@ from apps.account.serializers import LoginSerializer, UserSerializer, TaxRateSer
 from apps.account.models import TaxRate, Letterhead
 from apps.account.letterhead_generator import generate_letterhead_docx
 from rest_framework import generics, permissions, viewsets
+from django.contrib.auth.hashers import make_password, check_password
 from .serializers import UserProfileSerializer
 
 class LoginView(APIView):
@@ -34,6 +35,35 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         # Return the current logged-in user
         return self.request.user
+
+class LockPinView(APIView):
+    """Set/remove (PUT/DELETE, both need the account password) or verify (POST) the screen-lock PIN."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request):
+        pin = str(request.data.get('pin', ''))
+        if not (pin.isascii() and pin.isdigit() and len(pin) == 6):
+            return Response({'error': 'PIN must be exactly 6 digits.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not request.user.check_password(str(request.data.get('password', ''))):
+            return Response({'error': 'Password is incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+        request.user.lock_pin = make_password(pin)
+        request.user.save(update_fields=['lock_pin'])
+        return Response({'has_lock_pin': True})
+
+    def delete(self, request):
+        if not request.user.check_password(str(request.data.get('password', ''))):
+            return Response({'error': 'Password is incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+        request.user.lock_pin = ''
+        request.user.save(update_fields=['lock_pin'])
+        return Response({'has_lock_pin': False})
+
+    def post(self, request):
+        stored = request.user.lock_pin
+        if not stored:
+            return Response({'error': 'No PIN is set.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not check_password(str(request.data.get('pin', '')), stored):
+            return Response({'error': 'Incorrect PIN.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'ok': True})
 
 class TaxRateViewSet(viewsets.ModelViewSet):
     serializer_class = TaxRateSerializer

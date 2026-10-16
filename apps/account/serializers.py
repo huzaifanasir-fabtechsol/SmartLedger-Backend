@@ -72,14 +72,19 @@ class UserProfileSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, required=False)
     tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+    has_lock_pin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'company_email', 'company_name', 'business_registration',
-            'company_phone', 'company_website', 'company_address', 'tax_rate', 'password', 'password2'
+            'company_phone', 'company_website', 'company_address', 'tax_rate', 'password', 'password2',
+            'has_lock_pin'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'has_lock_pin']
+
+    def get_has_lock_pin(self, obj):
+        return bool(obj.lock_pin)
 
     def to_internal_value(self, data):
         if hasattr(data, 'copy'):
