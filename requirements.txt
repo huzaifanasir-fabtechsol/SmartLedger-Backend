@@ -41,3 +41,5 @@ gunicorn==22.0.0
 python-dotenv==1.0.1
 celery==5.6.3
 redis==6.4.0
+python-docx==1.2.0
+requests==2.34.2
