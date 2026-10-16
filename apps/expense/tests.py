@@ -540,3 +540,36 @@ class BulkImportTests(TestCase):
         self.assertEqual(summary['total_rows'], 3)
         self.assertEqual(summary['expense_rows'], 2)
         self.assertEqual(summary['deposit_rows'], 1)
+
+    def test_multiple_taxes_crud_and_counts(self):
+        category = ExpenseCategory.objects.create(user=self.user, name='General')
+        # Test creating expense with 8% exclusive, 7% inclusive, and 10% exclusive
+        data = {
+            'title': 'Multi Tax Expense',
+            'amount': '10700.00',
+            'date': '2026-10-15',
+            'category': category.id,
+            'taxes': [
+                {'name': 'Tax 8% Excl', 'rate': 8.0, 'category': 'exclusive'},
+                {'name': 'Tax 7% Incl', 'rate': 7.0, 'category': 'inclusive'},
+                {'name': 'Tax 10% Excl', 'rate': 10.0, 'category': 'exclusive'},
+            ]
+        }
+        serializer = ExpenseSerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        expense = serializer.save(user=self.user)
+
+        # 10700 with 7% inclusive gives base: 10000.00, inclusive tax: 700.00
+        # 8% exclusive on 10000 gives: 800.00
+        # 10% exclusive on 10000 gives: 1000.00
+        self.assertEqual(expense.amount, Decimal('10000.00'))
+        self.assertEqual(expense.number_of_taxes, 3)
+        self.assertEqual(expense.number_of_exclusive, 2)
+        self.assertEqual(expense.number_of_inclusive_tax, 1)
+        self.assertEqual(expense.exclusive_tax_amount, Decimal('1800.00'))
+        self.assertEqual(expense.inclusive_tax_amount, Decimal('700.00'))
+        self.assertEqual(expense.tax_amount, Decimal('2500.00'))
+        self.assertEqual(expense.total_amount, Decimal('12500.00'))
+        self.assertEqual(expense.tax_category, 'mixed')
+        self.assertEqual(len(expense.taxes), 3)
+

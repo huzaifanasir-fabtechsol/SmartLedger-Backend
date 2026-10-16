@@ -121,7 +121,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         if tax_cat:
             if tax_cat == 'none':
                 queryset = queryset.filter(Q(tax_percent_used__isnull=True) | Q(tax_percent_used=0))
-            elif tax_cat in ['inclusive', 'exclusive']:
+            elif tax_cat in ['inclusive', 'exclusive', 'mixed']:
                 queryset = queryset.filter(tax_category=tax_cat)
 
         if search:
@@ -278,7 +278,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         elements.append(Spacer(1, 15))
 
         # Expense details with tax breakdown
-        has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
+        num_taxes = getattr(expense, 'number_of_taxes', 0) or 0
+        has_tax = (expense.tax_percent_used is not None and expense.tax_percent_used > 0) or num_taxes > 0
         tax_amount = expense.tax_amount if expense.tax_amount is not None else (
             (expense.amount * expense.tax_percent_used / Decimal('100')) if has_tax else Decimal('0')
         )
@@ -286,7 +287,12 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         tax_cat = getattr(expense, 'tax_category', 'exclusive')
         if has_tax:
-            tax_cat_text = "Tax Inclusive" if tax_cat == 'inclusive' else "Tax Exclusive"
+            if tax_cat == 'mixed':
+                tax_cat_text = f"Mixed ({num_taxes} Taxes: {getattr(expense, 'number_of_exclusive', 0)} Excl, {getattr(expense, 'number_of_inclusive_tax', 0)} Incl)"
+            elif tax_cat == 'inclusive':
+                tax_cat_text = "Tax Inclusive"
+            else:
+                tax_cat_text = "Tax Exclusive"
         else:
             tax_cat_text = "No Tax"
 
@@ -294,10 +300,19 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             ["Title:", expense.title],
             ["Base Amount:" if has_tax else "Amount:", f"¥ {expense.amount:,.0f}"],
             ["Tax Category:", tax_cat_text],
-            ["Tax Rate:", f"{expense.tax_percent_used:.2f}%" if has_tax else "-"],
+        ]
+
+        if num_taxes > 1 and getattr(expense, 'taxes', None):
+            tax_rate_str = ", ".join([f"{t.get('rate')}% ({'Incl' if t.get('category') == 'inclusive' else 'Excl'})" for t in expense.taxes])
+            detail_data.append(["No. of Taxes:", f"{num_taxes} ({getattr(expense, 'number_of_exclusive', 0)} Excl, {getattr(expense, 'number_of_inclusive_tax', 0)} Incl)"])
+            detail_data.append(["Tax Rates:", tax_rate_str])
+        else:
+            detail_data.append(["Tax Rate:", f"{expense.tax_percent_used:.2f}%" if (has_tax and expense.tax_percent_used) else "-"])
+
+        detail_data.extend([
             ["Tax Amount:", f"¥ {tax_amount:,.0f}" if has_tax else "¥ 0"],
             ["Total (Incl. Tax):", f"¥ {total_with_tax:,.0f}"],
-        ]
+        ])
 
         detail_data.extend([
             ["Category:", expense.category.name if expense.category else 'N/A'],
@@ -451,16 +466,28 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             else:
                 payment_text = '-'
 
-            has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
+            num_taxes = getattr(expense, 'number_of_taxes', 0) or 0
+            has_tax = (expense.tax_percent_used is not None and expense.tax_percent_used > 0) or num_taxes > 0
             if has_tax:
-                tax_cat_label = "Inclusive" if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else "Exclusive"
-                tax_rate_text = f"{expense.tax_percent_used:.1f}%"
+                if getattr(expense, 'tax_category', 'exclusive') == 'mixed':
+                    tax_cat_label = f"Mixed ({num_taxes})"
+                elif getattr(expense, 'tax_category', 'exclusive') == 'inclusive':
+                    tax_cat_label = "Inclusive"
+                else:
+                    tax_cat_label = "Exclusive"
+
+                if num_taxes > 1 and expense.taxes:
+                    tax_rate_text = ", ".join([f"{t.get('rate')}%" for t in expense.taxes])
+                elif expense.tax_percent_used:
+                    tax_rate_text = f"{expense.tax_percent_used:.1f}%"
+                else:
+                    tax_rate_text = "-"
             else:
                 tax_cat_label = "None"
                 tax_rate_text = "-"
 
             tax_amount_val = expense.tax_amount if expense.tax_amount is not None else (
-                (expense.amount * expense.tax_percent_used / Decimal('100')) if has_tax else Decimal('0')
+                (expense.amount * expense.tax_percent_used / Decimal('100')) if (has_tax and expense.tax_percent_used) else Decimal('0')
             )
             tax_amount_text = f"¥ {tax_amount_val:,.0f}" if (has_tax and tax_amount_val > 0) else "-"
             row_total = expense.amount + (tax_amount_val if has_tax else Decimal('0'))
@@ -687,17 +714,27 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         exclusive_tax_amount = Decimal('0')
         exclusive_count = 0
 
+        total_mixed_amount = Decimal('0')
+        mixed_base_amount = Decimal('0')
+        mixed_tax_amount = Decimal('0')
+        mixed_count = 0
+
         total_no_tax_amount = Decimal('0')
         no_tax_count = 0
+
+        total_number_of_taxes = 0
+        total_number_of_exclusive = 0
+        total_number_of_inclusive_tax = 0
 
         rate_buckets = {}
 
         for exp in queryset:
             amt = exp.amount or Decimal('0')
-            has_tax = exp.tax_percent_used is not None and exp.tax_percent_used > Decimal('0')
+            num_taxes = getattr(exp, 'number_of_taxes', 0) or 0
+            has_tax = (exp.tax_percent_used is not None and exp.tax_percent_used > Decimal('0')) or num_taxes > 0
             if exp.tax_amount is not None:
                 tax = exp.tax_amount
-            elif has_tax:
+            elif has_tax and exp.tax_percent_used:
                 tax = (amt * exp.tax_percent_used / Decimal('100')).quantize(Decimal('0.01'))
             else:
                 tax = Decimal('0')
@@ -713,31 +750,75 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 total_no_tax_amount += amt
                 no_tax_count += 1
                 rate_key = 0.0
+                if rate_key not in rate_buckets:
+                    rate_buckets[rate_key] = {
+                        'rate': rate_key,
+                        'base_amount': Decimal('0'),
+                        'tax_amount': Decimal('0'),
+                        'total_amount': Decimal('0'),
+                        'count': 0
+                    }
+                rate_buckets[rate_key]['base_amount'] += amt
+                rate_buckets[rate_key]['total_amount'] += amt
+                rate_buckets[rate_key]['count'] += 1
             else:
-                rate_key = float(exp.tax_percent_used)
-                if tax_cat == 'inclusive':
+                inc_amt = exp.inclusive_tax_amount if exp.inclusive_tax_amount is not None else (tax if tax_cat == 'inclusive' else Decimal('0'))
+                exc_amt = exp.exclusive_tax_amount if exp.exclusive_tax_amount is not None else (tax if tax_cat == 'exclusive' else Decimal('0'))
+
+                inclusive_tax_amount += inc_amt
+                exclusive_tax_amount += exc_amt
+
+                n_taxes = exp.number_of_taxes if exp.number_of_taxes else 1
+                n_exc = exp.number_of_exclusive if exp.number_of_exclusive is not None else (1 if tax_cat == 'exclusive' else 0)
+                n_inc = exp.number_of_inclusive_tax if exp.number_of_inclusive_tax is not None else (1 if tax_cat == 'inclusive' else 0)
+
+                total_number_of_taxes += n_taxes
+                total_number_of_exclusive += n_exc
+                total_number_of_inclusive_tax += n_inc
+
+                if tax_cat == 'mixed':
+                    total_mixed_amount += tot
+                    mixed_base_amount += amt
+                    mixed_tax_amount += tax
+                    mixed_count += 1
+                elif tax_cat == 'inclusive':
                     total_inclusive_amount += tot
                     inclusive_base_amount += amt
-                    inclusive_tax_amount += tax
                     inclusive_count += 1
                 else:
                     total_exclusive_amount += tot
                     exclusive_base_amount += amt
-                    exclusive_tax_amount += tax
                     exclusive_count += 1
 
-            if rate_key not in rate_buckets:
-                rate_buckets[rate_key] = {
-                    'rate': rate_key,
-                    'base_amount': Decimal('0'),
-                    'tax_amount': Decimal('0'),
-                    'total_amount': Decimal('0'),
-                    'count': 0
-                }
-            rate_buckets[rate_key]['base_amount'] += amt
-            rate_buckets[rate_key]['tax_amount'] += tax
-            rate_buckets[rate_key]['total_amount'] += tot
-            rate_buckets[rate_key]['count'] += 1
+                # Track rate buckets
+                if exp.taxes and isinstance(exp.taxes, list) and len(exp.taxes) > 0:
+                    for t in exp.taxes:
+                        rk = float(t.get('rate', 0))
+                        t_amt = Decimal(str(t.get('amount', 0)))
+                        if rk not in rate_buckets:
+                            rate_buckets[rk] = {
+                                'rate': rk,
+                                'base_amount': Decimal('0'),
+                                'tax_amount': Decimal('0'),
+                                'total_amount': Decimal('0'),
+                                'count': 0
+                            }
+                        rate_buckets[rk]['tax_amount'] += t_amt
+                        rate_buckets[rk]['count'] += 1
+                elif exp.tax_percent_used:
+                    rk = float(exp.tax_percent_used)
+                    if rk not in rate_buckets:
+                        rate_buckets[rk] = {
+                            'rate': rk,
+                            'base_amount': Decimal('0'),
+                            'tax_amount': Decimal('0'),
+                            'total_amount': Decimal('0'),
+                            'count': 0
+                        }
+                    rate_buckets[rk]['base_amount'] += amt
+                    rate_buckets[rk]['tax_amount'] += tax
+                    rate_buckets[rk]['total_amount'] += tot
+                    rate_buckets[rk]['count'] += 1
 
         breakdown_list = []
         for rk in sorted(rate_buckets.keys(), reverse=True):
@@ -762,8 +843,15 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             'exclusive_base_amount': float(exclusive_base_amount),
             'exclusive_tax_amount': float(exclusive_tax_amount),
             'exclusive_count': exclusive_count,
+            'total_mixed_amount': float(total_mixed_amount),
+            'mixed_base_amount': float(mixed_base_amount),
+            'mixed_tax_amount': float(mixed_tax_amount),
+            'mixed_count': mixed_count,
             'total_no_tax_amount': float(total_no_tax_amount),
             'no_tax_count': no_tax_count,
+            'total_number_of_taxes': total_number_of_taxes,
+            'total_number_of_exclusive': total_number_of_exclusive,
+            'total_number_of_inclusive_tax': total_number_of_inclusive_tax,
             'expense_count': queryset.count(),
             'tax_rate_breakdown': breakdown_list,
         })
@@ -798,7 +886,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         headers = [
             'Sr', 'Date', 'Title', 'Category', 'Payment Method',
-            'Tax Category', 'Tax Rate (%)', 'Pre-Tax Amount (¥)', 'Tax Amount (¥)', 'Total Amount (¥)'
+            'Tax Category', 'No. of Taxes', 'No. of Excl.', 'No. of Incl.', 'Tax Rate(s)',
+            'Pre-Tax Amount (¥)', 'Excl. Tax (¥)', 'Incl. Tax (¥)', 'Total Tax (¥)', 'Total Amount (¥)'
         ]
         ws.append(headers)
         header_row = 4
@@ -808,14 +897,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             cell.font = header_font
             cell.fill = header_fill
             cell.border = thin_border
-            if col_idx in [1, 2, 5, 6, 7]:
+            if col_idx in [1, 2, 5, 6, 7, 8, 9, 10]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_idx in [8, 9, 10]:
+            elif col_idx in [11, 12, 13, 14, 15]:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
 
         total_amount = Decimal('0')
+        total_excl_tax = Decimal('0')
+        total_incl_tax = Decimal('0')
         total_tax_amount = Decimal('0')
         total_grand_amount = Decimal('0')
         row_num = header_row + 1
@@ -825,17 +916,44 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             amount_val = float(expense.amount) if expense.amount is not None else 0.0
             payment_method = 'Cash' if expense.is_cash else 'Bank'
 
-            has_tax = expense.tax_percent_used is not None and expense.tax_percent_used > 0
-            tax_rate_val = float(expense.tax_percent_used) if has_tax else 0.0
+            num_taxes = getattr(expense, 'number_of_taxes', 0) or 0
+            has_tax = (expense.tax_percent_used is not None and expense.tax_percent_used > 0) or num_taxes > 0
+            tax_rate_val = float(expense.tax_percent_used) if (expense.tax_percent_used and expense.tax_percent_used > 0) else 0.0
+
             tax_amount_val = float(expense.tax_amount) if (expense.tax_amount is not None) else (
                 round(amount_val * tax_rate_val / 100.0, 2) if has_tax else 0.0
             )
             total_with_tax = amount_val + tax_amount_val
 
+            tax_cat = getattr(expense, 'tax_category', 'exclusive')
             if has_tax:
-                tax_cat_text = 'Tax Inclusive' if getattr(expense, 'tax_category', 'exclusive') == 'inclusive' else 'Tax Exclusive'
+                if tax_cat == 'mixed':
+                    tax_cat_text = 'Tax Mixed'
+                elif tax_cat == 'inclusive':
+                    tax_cat_text = 'Tax Inclusive'
+                else:
+                    tax_cat_text = 'Tax Exclusive'
             else:
                 tax_cat_text = 'No Tax'
+
+            n_taxes = num_taxes if num_taxes > 0 else (1 if has_tax else 0)
+            n_exc = getattr(expense, 'number_of_exclusive', 0) if num_taxes > 0 else (1 if has_tax and tax_cat == 'exclusive' else 0)
+            n_inc = getattr(expense, 'number_of_inclusive_tax', 0) if num_taxes > 0 else (1 if has_tax and tax_cat == 'inclusive' else 0)
+
+            if expense.taxes and isinstance(expense.taxes, list) and len(expense.taxes) > 0:
+                tax_rate_str = ", ".join([f"{t.get('rate')}% ({'Incl' if t.get('category') == 'inclusive' else 'Excl'})" for t in expense.taxes])
+            elif has_tax and tax_rate_val > 0:
+                tax_rate_str = f"{tax_rate_val:.2f}%"
+            else:
+                tax_rate_str = "-"
+
+            excl_tax_val = float(expense.exclusive_tax_amount or 0) if has_tax else 0.0
+            incl_tax_val = float(expense.inclusive_tax_amount or 0) if has_tax else 0.0
+            if has_tax and excl_tax_val == 0.0 and incl_tax_val == 0.0 and tax_amount_val > 0:
+                if tax_cat == 'inclusive':
+                    incl_tax_val = tax_amount_val
+                else:
+                    excl_tax_val = tax_amount_val
 
             ws.append([
                 idx,
@@ -844,8 +962,13 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 category_name,
                 payment_method,
                 tax_cat_text,
-                f"{tax_rate_val:.2f}%" if has_tax else "-",
+                n_taxes,
+                n_exc,
+                n_inc,
+                tax_rate_str,
                 amount_val,
+                excl_tax_val,
+                incl_tax_val,
                 tax_amount_val,
                 total_with_tax
             ])
@@ -854,9 +977,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 c = ws.cell(row=row_num, column=col_idx)
                 c.font = regular_font
                 c.border = thin_border
-                if col_idx in [1, 2, 5, 6, 7]:
+                if col_idx in [1, 2, 5, 6, 7, 8, 9, 10]:
                     c.alignment = Alignment(horizontal="center", vertical="center")
-                elif col_idx in [8, 9, 10]:
+                elif col_idx in [11, 12, 13, 14, 15]:
                     c.alignment = Alignment(horizontal="right", vertical="center")
                     c.number_format = '¥#,##0'
                 else:
@@ -865,19 +988,21 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             if expense.amount:
                 total_amount += expense.amount
             if has_tax:
+                total_excl_tax += Decimal(str(excl_tax_val))
+                total_incl_tax += Decimal(str(incl_tax_val))
                 total_tax_amount += Decimal(str(tax_amount_val))
             total_grand_amount += Decimal(str(total_with_tax))
             row_num += 1
 
         # Total row at bottom
-        ws.append(['Total', '', '', '', '', '', '', float(total_amount), float(total_tax_amount), float(total_grand_amount)])
+        ws.append(['Total', '', '', '', '', '', '', '', '', '', float(total_amount), float(total_excl_tax), float(total_incl_tax), float(total_tax_amount), float(total_grand_amount)])
         total_row = row_num
         for col_idx in range(1, len(headers) + 1):
             c = ws.cell(row=total_row, column=col_idx)
             c.font = bold_font
             c.fill = total_fill
             c.border = thin_border
-            if col_idx in [8, 9, 10]:
+            if col_idx in [11, 12, 13, 14, 15]:
                 c.alignment = Alignment(horizontal="right", vertical="center")
                 c.number_format = '¥#,##0'
             elif col_idx == 1:

@@ -110,7 +110,14 @@ WSGI_APPLICATION = 'project.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-if os.getenv('POSTGRES_DB') or os.getenv('DB_ENGINE') == 'django.db.backends.postgresql':
+if os.getenv('USE_SQLITE') == '1' or (not os.getenv('POSTGRES_DB') and os.getenv('DB_ENGINE') != 'django.db.backends.postgresql'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -119,13 +126,6 @@ if os.getenv('POSTGRES_DB') or os.getenv('DB_ENGINE') == 'django.db.backends.pos
             'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'taxmgmt_pass_2026'),
             'HOST': os.getenv('POSTGRES_HOST', 'db'),
             'PORT': os.getenv('POSTGRES_PORT', '5432'),
-        }
-    }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
 

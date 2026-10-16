@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from apps.account.models import BaseModel, User
 
@@ -28,18 +29,45 @@ class Expense(BaseModel):
     TAX_CATEGORY_CHOICES = [
         ('exclusive', 'Tax Exclusive'),
         ('inclusive', 'Tax Inclusive'),
+        ('mixed', 'Tax Mixed (Inclusive & Exclusive)'),
     ]
     # Tax tracking fields
     tax_category = models.CharField(
         max_length=20,
         choices=TAX_CATEGORY_CHOICES,
         default='exclusive',
-        help_text="Tax category: tax-inclusive (tax is included in the entered amount) or tax-exclusive (tax is added)."
+        help_text="Tax category: tax-inclusive, tax-exclusive, or mixed."
     )
-    tax_percent_used = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+    tax_percent_used = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True,
                                            help_text="The tax rate (%) applied to this expense, if any.")
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
-                                     help_text="The calculated tax amount for this expense.")
+                                     help_text="The total calculated tax amount for this expense.")
+
+    # Multiple taxes tracking fields
+    number_of_taxes = models.PositiveIntegerField(
+        default=0,
+        help_text="Total number of taxes applied to this expense."
+    )
+    number_of_exclusive = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of exclusive taxes applied to this expense."
+    )
+    number_of_inclusive_tax = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of inclusive taxes applied to this expense."
+    )
+    exclusive_tax_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0.00'), null=True, blank=True,
+        help_text="The total exclusive tax amount for this expense."
+    )
+    inclusive_tax_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0.00'), null=True, blank=True,
+        help_text="The total inclusive tax amount for this expense."
+    )
+    taxes = models.JSONField(
+        default=list, blank=True,
+        help_text="Detailed list of individual taxes applied (name, rate, category, amount)."
+    )
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='expenses')
 
     @property
