@@ -573,3 +573,49 @@ class BulkImportTests(TestCase):
         self.assertEqual(expense.tax_category, 'mixed')
         self.assertEqual(len(expense.taxes), 3)
 
+
+
+class MixedTaxReportTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='mixed', email='mixed@x.com', password='pw')
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        cat = ExpenseCategory.objects.create(user=self.user, name='General')
+        def make(title, amount, taxes):
+            s = ExpenseSerializer(data={'title': title, 'amount': amount, 'date': '2026-10-15',
+                                        'category': cat.id, 'taxes': taxes})
+            self.assertTrue(s.is_valid(), s.errors)
+            s.save(user=self.user)
+        make('mixed', '10700.00', [{'rate': 8, 'category': 'exclusive'}, {'rate': 7, 'category': 'inclusive'}])
+        make('excl', '1000.00', [{'rate': 10, 'category': 'exclusive'}])
+        make('incl', '1100.00', [{'rate': 10, 'category': 'inclusive'}])
+        make('none', '500.00', [])
+
+    def test_tax_stats_splits_mixed_from_inclusive_and_exclusive(self):
+        d = self.client.get('/api/expenses/tax_stats/').json()
+        self.assertEqual(d['mixed_count'], 1)
+        self.assertEqual(d['mixed_base_amount'], 10000.0)
+        self.assertEqual(d['mixed_excl_tax_amount'], 800.0)
+        self.assertEqual(d['mixed_incl_tax_amount'], 700.0)
+        self.assertEqual(d['total_mixed_amount'], 11500.0)
+        self.assertEqual(d['inclusive_count'], 1)
+        self.assertEqual(d['inclusive_tax_amount'], 100.0)
+        self.assertEqual(d['exclusive_count'], 1)
+        self.assertEqual(d['exclusive_tax_amount'], 100.0)
+        self.assertEqual(d['total_tax_paid'], 1700.0)
+        self.assertEqual(d['grand_total_amount'], 10000 + 1000 + 1000 + 500 + 1700)
+        ten = next(b for b in d['tax_rate_breakdown'] if b['rate'] == 10.0)
+        self.assertEqual(ten['count'], 2)
+        self.assertEqual(ten['base_amount'], 2000.0)
+
+    def test_filter_and_export_include_mixed(self):
+        res = self.client.get('/api/expenses/?tax_category=mixed').json()
+        self.assertEqual(res['count'], 1)
+        x = self.client.get('/api/expenses/export_tax_xlsx/')
+        self.assertEqual(x.status_code, 200)
+        from openpyxl import load_workbook
+        ws = load_workbook(BytesIO(x.content)).active
+        rows = [[c.value for c in r] for r in ws.iter_rows(min_row=5)]
+        mixed = next(r for r in rows if r[2] == 'mixed')
+        self.assertEqual(mixed[5], 'Tax Mixed')
+        self.assertEqual(mixed[10:15], [10000.0, 800.0, 700.0, 1500.0, 11500.0])

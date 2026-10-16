@@ -717,6 +717,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         total_mixed_amount = Decimal('0')
         mixed_base_amount = Decimal('0')
         mixed_tax_amount = Decimal('0')
+        mixed_excl_tax_amount = Decimal('0')
+        mixed_incl_tax_amount = Decimal('0')
         mixed_count = 0
 
         total_no_tax_amount = Decimal('0')
@@ -765,9 +767,6 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 inc_amt = exp.inclusive_tax_amount if exp.inclusive_tax_amount is not None else (tax if tax_cat == 'inclusive' else Decimal('0'))
                 exc_amt = exp.exclusive_tax_amount if exp.exclusive_tax_amount is not None else (tax if tax_cat == 'exclusive' else Decimal('0'))
 
-                inclusive_tax_amount += inc_amt
-                exclusive_tax_amount += exc_amt
-
                 n_taxes = exp.number_of_taxes if exp.number_of_taxes else 1
                 n_exc = exp.number_of_exclusive if exp.number_of_exclusive is not None else (1 if tax_cat == 'exclusive' else 0)
                 n_inc = exp.number_of_inclusive_tax if exp.number_of_inclusive_tax is not None else (1 if tax_cat == 'inclusive' else 0)
@@ -780,14 +779,18 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                     total_mixed_amount += tot
                     mixed_base_amount += amt
                     mixed_tax_amount += tax
+                    mixed_excl_tax_amount += exc_amt
+                    mixed_incl_tax_amount += inc_amt
                     mixed_count += 1
                 elif tax_cat == 'inclusive':
                     total_inclusive_amount += tot
                     inclusive_base_amount += amt
+                    inclusive_tax_amount += tax
                     inclusive_count += 1
                 else:
                     total_exclusive_amount += tot
                     exclusive_base_amount += amt
+                    exclusive_tax_amount += tax
                     exclusive_count += 1
 
                 # Track rate buckets
@@ -803,7 +806,9 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                                 'total_amount': Decimal('0'),
                                 'count': 0
                             }
+                        rate_buckets[rk]['base_amount'] += amt
                         rate_buckets[rk]['tax_amount'] += t_amt
+                        rate_buckets[rk]['total_amount'] += amt + t_amt
                         rate_buckets[rk]['count'] += 1
                 elif exp.tax_percent_used:
                     rk = float(exp.tax_percent_used)
@@ -846,6 +851,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             'total_mixed_amount': float(total_mixed_amount),
             'mixed_base_amount': float(mixed_base_amount),
             'mixed_tax_amount': float(mixed_tax_amount),
+            'mixed_excl_tax_amount': float(mixed_excl_tax_amount),
+            'mixed_incl_tax_amount': float(mixed_incl_tax_amount),
             'mixed_count': mixed_count,
             'total_no_tax_amount': float(total_no_tax_amount),
             'no_tax_count': no_tax_count,
