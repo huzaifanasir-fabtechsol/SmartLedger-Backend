@@ -275,7 +275,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         ws.append([f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Orders: {queryset.count()}"])
         ws.append([])
         
-        base_headers = ['#', 'Date', 'Order #', 'Vehicle / Chassis', 'Type', 'Category', 'Payment Status', 'Payment Method']
+        base_headers = ['#', 'Date', 'Order #', 'Type', 'Category', 'Payment Status', 'Payment Method']
         selected_headers = [FIELD_CONFIG[f] for f in selected_fields]
         headers = base_headers + selected_headers
         ws.append(headers)
@@ -286,7 +286,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             cell.font = header_font
             cell.fill = header_fill
             cell.border = thin_border
-            if col_idx in [1, 2, 5, 6, 7, 8]:
+            if col_idx in [1, 2, 4, 5, 6, 7]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             elif col_idx > len(base_headers):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -311,7 +311,6 @@ class OrderViewSet(viewsets.ModelViewSet):
                     row_idx,
                     str(order.transaction_date),
                     order.order_number,
-                    '-',
                     t_type,
                     t_cat,
                     p_status,
@@ -325,24 +324,16 @@ class OrderViewSet(viewsets.ModelViewSet):
                     if col_idx > len(base_headers):
                         c.alignment = Alignment(horizontal="right", vertical="center")
                         c.number_format = '¥#,##0'
-                    elif col_idx in [1, 2, 5, 6, 7, 8]:
+                    elif col_idx in [1, 2, 4, 5, 6, 7]:
                         c.alignment = Alignment(horizontal="center", vertical="center")
                 row_num += 1
                 row_idx += 1
             else:
                 for item in items:
-                    v_info = []
-                    if item.car and item.car.category:
-                        v_info.append(f"{item.car.category.company} {item.car.category.model}")
-                    if item.car and item.car.chassis_number:
-                        v_info.append(item.car.chassis_number)
-                    vehicle_text = ' - '.join(v_info) if v_info else (item.venue or '-')
-                    
                     row_data = [
                         row_idx,
                         str(order.transaction_date),
                         order.order_number,
-                        vehicle_text,
                         t_type,
                         t_cat,
                         p_status,
@@ -361,13 +352,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                         if col_idx > len(base_headers):
                             c.alignment = Alignment(horizontal="right", vertical="center")
                             c.number_format = '¥#,##0'
-                        elif col_idx in [1, 2, 5, 6, 7, 8]:
+                        elif col_idx in [1, 2, 4, 5, 6, 7]:
                             c.alignment = Alignment(horizontal="center", vertical="center")
                     row_num += 1
                     row_idx += 1
                     
         # Total row
-        total_row_data = ['Total', '', '', '', '', '', '', '']
+        total_row_data = ['Total', '', '', '', '', '', '']
         for f in selected_fields:
             total_row_data.append(float(totals[f]))
         ws.append(total_row_data)
