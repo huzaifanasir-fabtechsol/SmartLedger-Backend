@@ -65,7 +65,7 @@ class LetterheadViewSet(viewsets.ModelViewSet):
         data = request.data or {}
         docx_buffer = generate_letterhead_docx(data)
         company_name = data.get('name') or data.get('companyName') or 'Company'
-        clean_name = re.sub(r'[^a-zA-Z0-9_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]', '_', company_name).strip('_') or 'Letterhead'
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', company_name).strip('_') or 'Letterhead'
         filename = f"{clean_name}_Letterhead.docx"
 
         response = HttpResponse(
@@ -83,7 +83,7 @@ class LetterheadViewSet(viewsets.ModelViewSet):
         """
         letterhead = self.get_object()
         docx_buffer = generate_letterhead_docx(letterhead)
-        clean_name = re.sub(r'[^a-zA-Z0-9_\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff-]', '_', letterhead.name or 'Company').strip('_') or 'Letterhead'
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', letterhead.name or 'Company').strip('_') or 'Letterhead'
         filename = f"{clean_name}_Letterhead.docx"
 
         response = HttpResponse(
