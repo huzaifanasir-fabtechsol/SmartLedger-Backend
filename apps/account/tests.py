@@ -44,3 +44,51 @@ class LetterheadApiTests(APITestCase):
         ]
         for payload in bad:
             self.assertEqual(self.client.post(self.url, payload, format='json').status_code, 400, payload)
+
+    def test_export_docx_from_payload(self):
+        """Test exporting letterhead as editable docx directly from JSON payload."""
+        import docx
+        import io
+
+        payload = {
+            'companyName': 'ILYAS SONS 合同会社',
+            'tagline': 'Automotive Group',
+            'address': 'Tokyo, Japan',
+            'phone': '+81 90-1234-5678',
+            'email': 'contact@ilyassons.jp',
+            'template': 'angles',
+            'color1': '#1e3a8a',
+            'color2': '#3b82f6',
+            'showDate': True,
+        }
+        res = self.client.post(f"{self.url}export-docx/", payload, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            res['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+        self.assertIn('.docx', res['Content-Disposition'])
+
+        # Verify it is a valid Word document
+        doc = docx.Document(io.BytesIO(res.content))
+        self.assertTrue(len(doc.paragraphs) > 0)
+        found_name = any('ILYAS SONS' in p.text for p in doc.paragraphs)
+        self.assertTrue(found_name)
+
+    def test_export_docx_from_saved(self):
+        """Test exporting saved letterhead by ID as editable docx."""
+        lh = Letterhead.objects.create(
+            user=self.user,
+            name='My Saved Letterhead',
+            tagline='Corporate Group',
+            address='Osaka, Japan',
+            color1='#0f172a',
+            color2='#10b981'
+        )
+        res = self.client.get(f"{self.url}{lh.id}/export-docx/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            res['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+        self.assertIn('My_Saved_Letterhead', res['Content-Disposition'])
