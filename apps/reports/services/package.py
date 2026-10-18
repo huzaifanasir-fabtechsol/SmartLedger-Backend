@@ -11,6 +11,7 @@ def compute_package(user, fy):
     data = compute_statements(user, fy)
     profile = _profile(user)
     data['profile'] = profile
+    data['_fy'] = fy
     data['consumption'] = consumption_tax.compute(user, fy, data)
     corp = corporate_tax.compute(user, fy, data, profile)
     local = local_tax.compute(user, fy, data, corp, profile)
@@ -35,4 +36,5 @@ def public_view(data):
     out['schedules'] = {k: v for k, v in data['schedules'].items() if k in ('monthly', 'refund_reasons')}
     out['local'] = {k: v for k, v in data['local'].items() if k != 'offices'}
     out['corporate'] = {k: v for k, v in data['corporate'].items() if not k.startswith('form')}
+    out['corporate']['carry_total'] = data['corporate']['form7']['carry_total']
     return out

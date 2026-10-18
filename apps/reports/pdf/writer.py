@@ -80,7 +80,7 @@ class Writer:
         per = self.data['period']
         if self.lang == 'ja':
             return f"第{per['term_no']}期　自 {jp_date(per['start_date'])}　至 {jp_date(per['end_date'])}"
-        return f"Term {per['term_no']}: {en_date(per['start_date'])} – {en_date(per['end_date'])}"
+        return f"Term {per['term_no']}: {en_date(per['start_date'])} - {en_date(per['end_date'])}"
 
     # ---- pages ------------------------------------------------------------------------
     def _ensure_page(self):
@@ -119,9 +119,10 @@ class Writer:
         self.y -= h
 
     # ---- headings ---------------------------------------------------------------------
-    def begin_form(self, title, subtitle=None, filer=False):
-        """Start a form: a fresh page in full mode, flowing on the current page in simple mode."""
-        if self.full or not self._open or self.y < PAGE_H * 0.3:
+    def begin_form(self, title, subtitle=None, filer=False, need=170):
+        """Start a form: a fresh page in full mode, flowing on the current page in simple mode
+        (``need`` = points of room required to start on the current page)."""
+        if self.full or not self._open or self.y - BOTTOM < need:
             self.new_page()
         else:
             self.y -= 14
@@ -130,9 +131,12 @@ class Writer:
         if self.full:
             if self.lang == 'ja':
                 title_text = spaced(title_text)
-            c.setFont(self.font, 15)
+            size = 15
+            while size > 8 and c.stringWidth(title_text, self.font, size) > CONTENT_W:
+                size -= 0.5                      # long titles shrink to fit the page
+            c.setFont(self.font, size)
             c.drawCentredString(PAGE_W / 2, self.y - 8, title_text)
-            width = c.stringWidth(title_text, self.font, 15)
+            width = c.stringWidth(title_text, self.font, size)
             x0 = PAGE_W / 2 - width / 2
             c.setLineWidth(0.8)
             c.line(x0, self.y - 12, x0 + width, self.y - 12)
@@ -189,7 +193,7 @@ class Writer:
         data = [[self.para(c, 7.5) if i in (1, 3) else c for i, c in enumerate(r)] for r in rows]
         cmds = [('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BACKGROUND', (0, 0), (0, -1), GRAY),
                 ('BACKGROUND', (2, 0), (2, -1), GRAY), ('SPAN', (1, 3), (3, 3))]
-        self.table(data, [70, 215, 70, CONTENT_W - 355], cmds, size=7.5, gap=8)
+        self.table(data, [70, 215, 70, CONTENT_W - 355], cmds, size=7.5, gap=8, keep=True)
 
     # ---- text -------------------------------------------------------------------------
     def style(self, size=8, align=0, leading=None):
@@ -223,7 +227,7 @@ class Writer:
             self.y -= leading
 
     # ---- tables -----------------------------------------------------------------------
-    def table(self, data, widths, cmds=(), size=8, repeat=1, gap=10, x=MARGIN):
+    def table(self, data, widths, cmds=(), size=8, repeat=1, gap=10, x=MARGIN, keep=False):
         """Draw a platypus table at the cursor, splitting across pages when it does not fit."""
         self._ensure_page()
         style = [('FONTNAME', (0, 0), (-1, -1), self.font), ('FONTSIZE', (0, 0), (-1, -1), size),
@@ -236,6 +240,9 @@ class Writer:
         for _ in range(60):          # hard stop against pathological tables
             _, h = tbl.wrapOn(self.c, width, PAGE_H)
             room = self.y - BOTTOM
+            if keep and h > room and h <= TOP - BOTTOM and self.y < TOP - 1:
+                self.new_page()      # statement tables stay on one page when they can
+                continue
             if h <= room:
                 tbl.drawOn(self.c, x, self.y - h)
                 self.y -= h + gap

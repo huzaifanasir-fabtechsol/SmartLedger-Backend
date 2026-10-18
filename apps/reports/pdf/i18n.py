@@ -35,7 +35,14 @@ def tr(label, lang):
     if label is None:
         return ''
     label = str(label)
-    return ACCOUNT_EN.get(label.strip(), label) if lang == 'en' else label
+    if lang != 'en':
+        return label
+    core = label.strip()
+    translated = ACCOUNT_EN.get(core)
+    if translated is None:
+        return label
+    lead = label[:len(label) - len(label.lstrip())]       # keep the indentation
+    return lead + translated
 
 
 # Names of the asset categories / methods / schedule kinds as stored in the database.

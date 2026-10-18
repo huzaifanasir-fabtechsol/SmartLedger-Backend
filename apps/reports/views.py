@@ -6,11 +6,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import CompanyProfile, FiscalYear, FixedAsset, StatementInput
-from .pdf.package import PARTS, UnknownPart, build_package
+from .pdf.i18n import LANGS
+from .pdf.package import MODES, PARTS, UnknownPart, build_package
 from .serializers import (CompanyProfileSerializer, FiscalYearSerializer, FixedAssetSerializer,
                           StatementInputSerializer)
 from .services.inputs import normalize_inputs
-from .services.statements import compute_statements
+from .services.package import compute_package, public_view
 
 
 def _get_profile(user):
@@ -61,22 +62,28 @@ class FiscalYearViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def preview(self, request, pk=None):
-        data = compute_statements(request.user, self.get_object())
-        return Response(data)
+        return Response(public_view(compute_package(request.user, self.get_object())))
 
     @action(detail=True, methods=['get'])
     def pdf(self, request, pk=None):
+        """PDF package. Query: parts (comma list), lang (ja|en), mode (full|simple)."""
         fiscal_year = self.get_object()
         parts = [p for p in request.query_params.get('parts', 'kessan').split(',') if p]
+        lang = request.query_params.get('lang', 'ja')
+        mode = request.query_params.get('mode', 'full')
         if not parts:
             return Response({'detail': 'parts is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+        if lang not in LANGS or mode not in MODES:
+            return Response({'detail': f'lang must be one of {LANGS} and mode one of {MODES}.'},
+                            status=status.HTTP_400_BAD_REQUEST)
         try:
-            buffer = build_package(compute_statements(request.user, fiscal_year), parts)
+            buffer = build_package(compute_package(request.user, fiscal_year), parts, lang, mode)
         except UnknownPart as exc:
             return Response({'detail': f'Unknown parts: {exc}. Available: {", ".join(PARTS)}'},
                             status=status.HTTP_400_BAD_REQUEST)
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="financial_statements_term{fiscal_year.term_no}.pdf"'
+        filename = f'financial_statements_term{fiscal_year.term_no}_{lang}_{mode}.pdf'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         response['X-Content-Type-Options'] = 'nosniff'
         return response
 

@@ -40,6 +40,14 @@ SAMPLE_INPUTS = {
     'non_operating_income': [{'label': '受取利息', 'amount': 6}, {'label': '雑収入', 'amount': 594}],
     'income_taxes': 79100, 'prior_year_taxes': 150000,
     'capital': 5000000, 'opening_retained_earnings': -4064100,
+    'tax': {
+        'consumption': {
+            'sales_incl_10': 31548751, 'nontaxable_sales': 6, 'purchase_incl_10': 35053275,
+            'purchase_incl_8': 27857, 'purchase_returns_10': 13178,
+            'transitional_incl_10': 3187439, 'transitional_incl_8': 56626,
+        },
+        'corporate': {'prior_losses': [{'label': '2023', 'amount': 136500}, {'label': '2024', 'amount': 327600}]},
+    },
 }
 
 
@@ -137,9 +145,13 @@ class StatementTests(TestCase):
         self.assertEqual(data['warnings'], [])
 
     def test_notes_include_derived_amounts(self):
-        notes = '\n'.join(compute_statements(self.user, self.fy)['notes'])
-        self.assertIn('266,560円', notes)
-        self.assertIn('142,150円', notes)
+        notes = compute_statements(self.user, self.fy)['notes']
+        ja = '\n'.join(j for j, _ in notes)
+        en = '\n'.join(e for _, e in notes)
+        self.assertIn('266,560円', ja)
+        self.assertIn('142,150円', ja)
+        self.assertIn('JPY 266,560', en)
+        self.assertIn('JPY 142,150', en)
 
     def test_unbalanced_sheet_is_flagged(self):
         record = self.fy.inputs

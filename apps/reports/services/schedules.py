@@ -29,7 +29,7 @@ def _kind(item, table):
 
 def _row(item):
     return {'name': item.get('counterparty') or item['label'], 'address': item.get('address', ''),
-            'amount': item['amount'], 'note': item.get('note') or item['label'],
+            'amount': item['amount'], 'note': item.get('note') or (item['label'] if item.get('counterparty') else ''),
             'rate': item.get('rate', ''), 'registration': item.get('registration', ''),
             'label': item['label']}
 

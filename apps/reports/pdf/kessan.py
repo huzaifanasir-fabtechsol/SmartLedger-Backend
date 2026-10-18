@@ -89,7 +89,7 @@ def draw_balance_sheet(w):
     bs = w.data['bs']
     end = w.data['period']['end_date']
     w.begin_form(('貸借対照表', 'Balance Sheet'),
-                 (f'{jp_date(end)}　現在', f'As of {en_date(end)}'))
+                 (f'{jp_date(end)}　現在', f'As of {en_date(end)}'), need=330)
     w.company_line()
 
     left, right = _bs_left(w, bs), _bs_right(w, bs)
@@ -126,7 +126,7 @@ def draw_balance_sheet(w):
             cmds += [('LINEABOVE', (2, idx), (3, idx), 0.5, colors.black),
                      ('LINEBELOW', (2, idx), (3, idx), 0.5, colors.black), ('ALIGN', (2, idx), (2, idx), 'CENTER')]
     third = CONTENT_W / 4
-    w.table(table, [third * 1.2, third * 0.8, third * 1.2, third * 0.8], cmds, size=8.5 if w.full else 7.5)
+    w.table(table, [third * 1.2, third * 0.8, third * 1.2, third * 0.8], cmds, size=8.5 if w.full else 7.5, keep=True)
 
 
 # ---------------------------------------------------------------- P&L / SG&A
@@ -144,12 +144,12 @@ def _two_amount_table(w, rows):
         elif kind == 'result':
             cmds += [('LINEABOVE', (2, idx), (2, idx), 0.5, colors.black),
                      ('LINEBELOW', (2, idx), (2, idx), 0.5, colors.black)]
-    w.table(table, [CONTENT_W - 210, 105, 105], cmds, size=8.5 if w.full else 7.5)
+    w.table(table, [CONTENT_W - 210, 105, 105], cmds, size=8.5 if w.full else 7.5, keep=True)
 
 
 def draw_profit_loss(w):
     pl = w.data['pl']
-    w.begin_form(('損益計算書', 'Income Statement'), _period(w))
+    w.begin_form(('損益計算書', 'Income Statement'), _period(w), need=470)
     w.company_line()
     i1, i2 = _ind(w, 2), _ind(w, 4)
 
@@ -191,7 +191,7 @@ def draw_profit_loss(w):
 
 def draw_sga(w):
     pl = w.data['pl']
-    w.begin_form(('販売費及び一般管理費内訳書', 'Schedule of SG&A Expenses'), _period(w))
+    w.begin_form(('販売費及び一般管理費内訳書', 'Schedule of SG&A Expenses'), _period(w), need=400)
     w.company_line()
     indent = _ind(w, 2)
     rows = [(indent + i['label'], i['amount'], None, 'item') for i in pl['sga_items']]
@@ -202,7 +202,7 @@ def draw_sga(w):
 # ---------------------------------------------------------------- equity statement
 def draw_equity(w):
     eq = w.data['equity']
-    w.begin_form(('社員資本等変動計算書', "Statement of Changes in Members' Equity"), _period(w))
+    w.begin_form(('社員資本等変動計算書', "Statement of Changes in Members' Equity"), _period(w), need=260)
     w.company_line()
     t = w.t
 
@@ -233,7 +233,7 @@ def draw_equity(w):
         ('SPAN', (2, 1), (2, 2)), ('SPAN', (3, 1), (3, 2)), ('SPAN', (6, 1), (6, 2)), ('SPAN', (7, 0), (7, 2)),
         ('SPAN', (8, 0), (8, 2)), ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ('BOX', (0, 0), (-1, -1), 0.8, colors.black),
     ]
-    w.table(table, [78, 50, 50, 48, 52, 52, 56, 50, CONTENT_W - 436], cmds, size=6.5)
+    w.table(table, [78, 50, 50, 48, 52, 52, 56, 50, CONTENT_W - 436], cmds, size=6.5, keep=True)
 
 
 # ---------------------------------------------------------------- notes
