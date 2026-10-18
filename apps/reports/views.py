@@ -11,7 +11,7 @@ from .pdf.package import MODES, PARTS, UnknownPart, build_package
 from .serializers import (CompanyProfileSerializer, FiscalYearSerializer, FixedAssetSerializer,
                           StatementInputSerializer)
 from .services.inputs import normalize_inputs
-from .services.package import compute_package, public_view
+from .services.package import auto_values, compute_package, public_view
 
 
 def _get_profile(user):
@@ -63,6 +63,11 @@ class FiscalYearViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def preview(self, request, pk=None):
         return Response(public_view(compute_package(request.user, self.get_object())))
+
+    @action(detail=True, methods=['get'], url_path='auto-values')
+    def auto_values(self, request, pk=None):
+        """The calculated value of every overridable field, ignoring any override the user has set."""
+        return Response(auto_values(request.user, self.get_object()))
 
     @action(detail=True, methods=['get'])
     def pdf(self, request, pk=None):

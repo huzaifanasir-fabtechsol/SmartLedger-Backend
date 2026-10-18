@@ -153,6 +153,7 @@ def compute(user, fy, data):
     refund_total = -L[26] if L[26] < 0 else 0
     return {
         'sources': sources, 'warnings': warnings,
+        'components': {'expenses_10': exp10, 'goods_10': goods10, 'assets_10': assets10, 'expenses_8': exp8},
         'sales': {'incl_10': sales_incl_10, 'incl_8': sales_incl_8, 'excl_10': excl_10, 'excl_8': excl_8,
                   'taxable_excl': taxable_excl, 'nontaxable': nontaxable, 'total_excl': total_excl,
                   'base_10': base_10, 'base_8': base_8, 'base': base,

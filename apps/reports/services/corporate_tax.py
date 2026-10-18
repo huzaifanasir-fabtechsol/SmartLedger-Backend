@@ -142,6 +142,7 @@ def finish_schedule5(data, corp, local):
     ]
     closing_sum = sum(r[5] for r in rows)
     corp['form5_1'] = {'rows': rows, 'closing_total': closing_sum,
+                       'unpaid': {'corporate': unpaid_corp, 'pref': unpaid_pref, 'city': unpaid_city},
                        'opening_total': sum(r[2] for r in rows),
                        'decrease_total': sum(r[3] for r in rows),
                        'increase_total': sum(r[4] for r in rows),

@@ -77,8 +77,11 @@ def _nonzero(items):
     return [i for i in items if i['amount'] != 0]
 
 
-def compute_statements(user, fy):
-    inputs = normalize_inputs(getattr(getattr(fy, 'inputs', None), 'data', None))
+def compute_statements(user, fy, raw_inputs=None):
+    """``raw_inputs`` replaces the saved inputs (used to calculate what the auto values would be)."""
+    if raw_inputs is None:
+        raw_inputs = getattr(getattr(fy, 'inputs', None), 'data', None)
+    inputs = normalize_inputs(raw_inputs)
     sources, warnings = {}, []
 
     def pick(key, derive):

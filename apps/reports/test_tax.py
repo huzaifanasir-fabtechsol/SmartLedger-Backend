@@ -4,7 +4,11 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from decimal import Decimal
+
 from apps.account.models import User
+from apps.expense.models import Expense, ExpenseCategory
+from apps.revenue.models import Order
 from apps.reports.models import CompanyProfile, FiscalYear
 from apps.reports.pdf.i18n import tr
 from apps.reports.pdf.package import UnknownPart, build_package
@@ -228,3 +232,49 @@ class EndpointTests(TestCase):
         bad = self.client.put(url, {'data': {'investments': [{'label': 'x', 'amount': 1, 'kind': 'bogus'}]}},
                               format='json')
         self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class AutoValueTests(TestCase):
+    """The auto-values endpoint reports what each field would calculate, ignoring saved overrides."""
+
+    def setUp(self):
+        setup(self)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.url = f'/api/reports/fiscal-years/{self.fy.id}/auto-values/'
+
+    def test_top_level_auto_ignores_saved_override(self):
+        Order.objects.create(user=self.user, order_number='S1', transaction_type='sale', transaction_catagory='local',
+                             transaction_date=D(2025, 6, 1), total_amount=1000000)
+        Order.objects.create(user=self.user, order_number='P1', transaction_type='purchase',
+                             transaction_catagory='local', transaction_date=D(2025, 7, 1), total_amount=400000)
+        data = self.client.get(self.url).data
+        self.assertEqual(SAMPLE_INPUTS['sales'], 28680691)          # the saved override is different
+        self.assertEqual(data['sales'], 1000000)
+        self.assertEqual(data['purchases'], 400000)
+        self.assertEqual(data['details']['sales'], [['Sale orders in the period', 1000000]])
+
+    def test_consumption_auto_builds_on_the_users_sales_and_shows_its_parts(self):
+        category = ExpenseCategory.objects.create(name='fuel', user=self.user)
+        Expense.objects.create(user=self.user, title='gas', amount=1000, tax_amount=Decimal('100'),
+                               tax_percent_used=Decimal('10'), date=D(2025, 3, 3), category=category)
+        data = self.client.get(self.url).data
+        c = data['consumption']
+        self.assertEqual(c['sales_incl_10'], round(28680691 * 1.10))       # from the user's sales figure
+        self.assertEqual(c['nontaxable_sales'], 6)
+        parts = dict(data['details']['consumption.purchase_incl_10'])
+        self.assertEqual(parts['Expenses carrying 10% tax'], 1100)
+        self.assertEqual(c['purchase_incl_10'], sum(parts.values()))
+        self.assertNotEqual(c['purchase_incl_10'], SAMPLE_INPUTS['tax']['consumption']['purchase_incl_10'])
+
+    def test_corporate_auto_values(self):
+        data = self.client.get(self.url).data
+        self.assertEqual(data['corporate']['entertainment_expenses'], 268420)
+        self.assertEqual(data['corporate']['unpaid_pref'], 20000)
+        self.assertEqual(data['corporate']['unpaid_city'], 59100)
+        self.assertEqual(data['corporate']['unpaid_corporate'], 0)
+
+    def test_requires_ownership(self):
+        other = User.objects.create_user(username='o', email='o@example.com', password='x')
+        fy = FiscalYear.objects.create(user=other, term_no=1, start_date=D(2025, 1, 1), end_date=D(2025, 12, 31))
+        self.assertEqual(self.client.get(f'/api/reports/fiscal-years/{fy.id}/auto-values/').status_code, 404)
