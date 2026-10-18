@@ -115,7 +115,9 @@ def compute(user, fy, data, corp, profile=None):
     due = due_date(fy.end_date)
     warnings = []
     if not (profile and profile.offices):
-        warnings.append('事務所(事業所)が未登録のため、会社の住所を唯一の事務所として地方税を計算しています。')
+        warnings.append(('事務所(事業所)が未登録のため、会社の住所を唯一の事務所として地方税を計算しています。',
+                         'No offices are registered, so local taxes are calculated with the company address as the '
+                         'only office.'))
 
     return {
         'offices': offices, 'total_employees': total_emp, 'due_date': due,

@@ -167,9 +167,11 @@ def compute_statements(user, fy):
     equity_total = inputs['capital'] + retained_earnings
     difference = assets_total - (liabilities_total + equity_total)
     if difference:
-        warnings.append(
-            f'貸借が一致しません (資産 {assets_total:,} − 負債・純資産 {liabilities_total + equity_total:,} = {difference:,})。'
-            '入力値を確認してください。')
+        liab_eq = liabilities_total + equity_total
+        warnings.append((
+            f'貸借が一致しません (資産 {assets_total:,} − 負債・純資産 {liab_eq:,} = {difference:,})。入力値を確認してください。',
+            f'The balance sheet does not balance (assets {assets_total:,} - liabilities and net assets {liab_eq:,} = '
+            f'{difference:,}). Check your inputs.'))
 
     bs = {
         'current_assets': current_assets, 'current_assets_total': current_total,

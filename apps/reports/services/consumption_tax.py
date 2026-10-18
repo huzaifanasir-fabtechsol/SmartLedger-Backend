@@ -94,7 +94,9 @@ def compute(user, fy, data):
         v['deductible'] = apply_ratio(v['subtotal'])
     deductible = col['6.24']['deductible'] + col['7.8']['deductible']
     if not full_deduction:
-        warnings.append('課税売上割合が95%未満(または売上5億円超)のため、一括比例配分方式で計算しています。')
+        warnings.append(('課税売上割合が95%未満(または売上5億円超)のため、一括比例配分方式で計算しています。',
+                         'The taxable-sales ratio is under 95% (or sales exceed ¥500m), so the lump-sum '
+                         'proportional method is used for input tax.'))
 
     # ---- Return lines (申告書 GK0306) ---------------------------------------------------
     L = {}

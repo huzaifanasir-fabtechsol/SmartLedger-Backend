@@ -11,7 +11,7 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
 
     def validate_corporate_number(self, value):
         if value and not (value.isdigit() and len(value) == 13):
-            raise serializers.ValidationError('法人番号は13桁の数字で入力してください。')
+            raise serializers.ValidationError('Corporate number must be 13 digits.')
         return value
 
 
@@ -44,7 +44,7 @@ class FixedAssetSerializer(serializers.ModelSerializer):
         method = attrs.get('method', getattr(self.instance, 'method', None))
         life = attrs.get('useful_life', getattr(self.instance, 'useful_life', 0))
         if method in ('straight_line', 'declining_200') and not life:
-            raise serializers.ValidationError({'useful_life': '耐用年数を入力してください。'})
+            raise serializers.ValidationError({'useful_life': 'Enter the useful life (years) for this depreciation method.'})
         return attrs
 
 

@@ -35,7 +35,9 @@ def compute(user, fy, data, profile=None):
     capital = inputs['capital'] or (profile.capital if profile else 0)
     sme = capital <= SME_CAPITAL_LIMIT
     if not sme:
-        warnings.append('資本金1億円超のため、大法人の取扱い(交際費・欠損金控除の制限等)は計算していません。')
+        warnings.append(('資本金1億円超のため、大法人の取扱い(交際費・欠損金控除の制限等)は計算していません。',
+                         'Capital exceeds ¥100m: large-company rules (entertainment and loss-deduction limits) '
+                         'are not calculated.'))
 
     # ---- 別表十五 entertainment ------------------------------------------------------
     if c['entertainment_expenses'] is not None:

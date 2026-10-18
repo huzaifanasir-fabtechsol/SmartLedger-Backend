@@ -21,11 +21,14 @@ def compute_package(user, fy):
 
     notes = []
     if corp['estimated_taxes'] != data['pl']['income_taxes']:
-        notes.append(f"計算上の法人税等 {corp['estimated_taxes']:,} と損益計算書の法人税・住民税及び事業税 "
-                     f"{data['pl']['income_taxes']:,} が異なります。")
+        calc, booked = corp['estimated_taxes'], data['pl']['income_taxes']
+        notes.append((f'計算上の法人税等 {calc:,} と損益計算書の法人税・住民税及び事業税 {booked:,} が異なります。',
+                      f'Calculated taxes ({calc:,}) differ from the corporate, inhabitant and enterprise taxes on the '
+                      f'income statement ({booked:,}).'))
     if corp['form5_1']['difference']:
-        notes.append(f"別表五(一)の差引合計と繰越利益剰余金に {corp['form5_1']['difference']:,} の差があります。"
-                     '未納税額を入力してください。')
+        diff = corp['form5_1']['difference']
+        notes.append((f'別表五(一)の差引合計と繰越利益剰余金に {diff:,} の差があります。未納税額を入力してください。',
+                      f'Schedule 5-(1) total differs from retained earnings by {diff:,}. Enter the unpaid tax balances.'))
     data['tax_notes'] = notes + corp['warnings'] + local['warnings'] + data['consumption']['warnings']
     return data
 
@@ -37,4 +40,10 @@ def public_view(data):
     out['local'] = {k: v for k, v in data['local'].items() if k != 'offices'}
     out['corporate'] = {k: v for k, v in data['corporate'].items() if not k.startswith('form')}
     out['corporate']['carry_total'] = data['corporate']['form7']['carry_total']
+    # The UI is English-only (it has its own translation toggle): expose the English message of each warning.
+    english = lambda items: [i[1] if isinstance(i, (tuple, list)) else i for i in items]
+    out['warnings'] = english(data['warnings'])
+    out['tax_notes'] = english(data['tax_notes'])
+    out['consumption'] = {**out['consumption'], 'warnings': english(out['consumption']['warnings'])}
+    out['notes'] = [n[1] if isinstance(n, (tuple, list)) else n for n in data['notes']]
     return out

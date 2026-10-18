@@ -132,7 +132,7 @@ class LocalTaxTests(TestCase):
     def test_no_tax_difference_noted_when_inputs_match(self):
         data = compute_package(self.user, self.fy)
         self.assertEqual(data['corporate']['estimated_taxes'], 79100)
-        self.assertFalse(any('計算上の法人税等' in n for n in data['tax_notes']))
+        self.assertFalse(any('differ from' in n[1] for n in data['tax_notes']))
 
     def test_business_tax_brackets_and_due_date(self):
         self.assertEqual(_business_tax(10_000_000), 492_000)
