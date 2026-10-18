@@ -69,6 +69,7 @@ INSTALLED_APPS += [
     "apps.expense",
     "apps.revenue",
     "apps.hr",
+    "apps.reports",
 ]
 
 INSTALLED_APPS += [

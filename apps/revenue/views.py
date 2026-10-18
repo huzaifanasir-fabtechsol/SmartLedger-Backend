@@ -5,7 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction, IntegrityError
 from django.http import HttpResponse
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, F, Case, When, Value, DecimalField
+from django.db.models.functions import Round
 from datetime import datetime
 from decimal import Decimal
 from reportlab.lib.pagesizes import A4, landscape
@@ -449,7 +450,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     def dashboard(self, request):
         orders = Order.objects.filter(user=request.user)
         expenses = Expense.objects.filter(user=request.user)
-        
+
         year = request.query_params.get('year')
         month = request.query_params.get('month')
 
@@ -468,12 +469,68 @@ class OrderViewSet(viewsets.ModelViewSet):
                 expenses = expenses.filter(date__month=month_val)
             except (ValueError, TypeError):
                 pass
-        
-        approved_amount = orders.filter(payment_status='completed').aggregate(total=Sum('total_amount'))['total'] or 0
-        pending_amount = orders.filter(payment_status='pending').aggregate(total=Sum('total_amount'))['total'] or 0
-        total_expense = expenses.aggregate(total=Sum('amount'))['total'] or 0
-        total_purchase = orders.filter(transaction_type='purchase').aggregate(total=Sum('total_amount'))['total'] or 0
+
+        # Failed invoices never happened, so they are left out of every total.
+        # Purchases are a cost, not income, so they are kept out of revenue.
+        valid_orders = orders.exclude(payment_status='failed')
+        sales_orders = valid_orders.exclude(transaction_type='purchase')
+        purchase_orders = valid_orders.filter(transaction_type='purchase')
+
+        def order_sum(qs):
+            return qs.aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+
+        approved_amount = order_sum(sales_orders.filter(payment_status='completed'))
+        pending_amount = order_sum(sales_orders.filter(payment_status='pending'))
+        total_purchase = order_sum(purchase_orders)
+        completed_purchase = order_sum(purchase_orders.filter(payment_status='completed'))
+        invoice_total = order_sum(valid_orders)
+        invoice_count = valid_orders.count()
+
+        # Tax on invoices: the same columns the Tax Reports page adds up.
+        money = DecimalField(max_digits=14, decimal_places=2)
+        invoice_tax = OrderItem.objects.filter(order__in=valid_orders).aggregate(
+            total=Sum(
+                F('vehicle_price_tax') + F('listing_fee_tax') + F('successful_bid_tax') +
+                F('commission_fee_tax') + F('transport_fee_tax') + F('registration_fee_tax'),
+                output_field=money,
+            )
+        )['total'] or Decimal('0')
+
+        # Expense.amount is stored without tax; tax is kept beside it. Older rows may
+        # only have tax_percent_used, so fall back to it like the expense tax stats do.
+        tax_expr = Case(
+            When(tax_amount__isnull=False, then=F('tax_amount')),
+            When(tax_percent_used__gt=0, then=Round(F('amount') * F('tax_percent_used') / Value(Decimal('100')), 2)),
+            default=Value(Decimal('0')),
+            output_field=money,
+        )
+        expense_agg = expenses.aggregate(excl=Sum('amount'), tax=Sum(tax_expr))
+        expense_excl_tax = expense_agg['excl'] or Decimal('0')
+        expense_tax = expense_agg['tax'] or Decimal('0')
+        expense_count = expenses.count()
+
+        net_profit = approved_amount - completed_purchase - expense_excl_tax
+
         latest_orders = orders.order_by('-transaction_date', '-id')[:10].values('id', 'transaction_date', 'transaction_type', 'payment_status', 'total_amount')
+
+        latest_expenses = []
+        for e in expenses.select_related('category').order_by('-date', '-id')[:10]:
+            if e.tax_amount is not None:
+                tax = e.tax_amount
+            elif e.tax_percent_used and e.tax_percent_used > 0:
+                tax = (e.amount * e.tax_percent_used / Decimal('100')).quantize(Decimal('0.01'))
+            else:
+                tax = Decimal('0')
+            latest_expenses.append({
+                'id': e.id,
+                'title': e.title,
+                'date': e.date,
+                'category_name': e.category.name if e.category else '',
+                'amount': float(e.amount),
+                'tax_amount': float(tax),
+                'total_amount': float(e.amount + tax),
+                'is_cash': e.is_cash,
+            })
 
         # Monthly breakdown for chart
         chart_year = None
@@ -489,7 +546,9 @@ class OrderViewSet(viewsets.ModelViewSet):
             user=request.user,
             transaction_date__year=chart_year,
             payment_status='completed'
-        ).values('transaction_date__month').annotate(total=Sum('total_amount'))
+        )
+        year_revenue = year_orders.exclude(transaction_type='purchase').values('transaction_date__month').annotate(total=Sum('total_amount'))
+        year_purchases = year_orders.filter(transaction_type='purchase').values('transaction_date__month').annotate(total=Sum('total_amount'))
 
         year_expenses = Expense.objects.filter(
             user=request.user,
@@ -497,14 +556,16 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).values('date__month').annotate(total=Sum('amount'))
 
         month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        rev_map = {item['transaction_date__month']: float(item['total'] or 0) for item in year_orders}
+        rev_map = {item['transaction_date__month']: float(item['total'] or 0) for item in year_revenue}
+        purchase_map = {item['transaction_date__month']: float(item['total'] or 0) for item in year_purchases}
         exp_map = {item['date__month']: float(item['total'] or 0) for item in year_expenses}
 
         monthly_chart = []
         has_chart_data = False
         for m in range(1, 13):
             r = rev_map.get(m, 0.0)
-            e = exp_map.get(m, 0.0)
+            # "exp" is everything spent: expenses (without tax) plus completed purchases.
+            e = exp_map.get(m, 0.0) + purchase_map.get(m, 0.0)
             if r > 0 or e > 0:
                 has_chart_data = True
             monthly_chart.append({
@@ -518,9 +579,17 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response({
             'approved_amount': float(approved_amount),
             'pending_amount': float(pending_amount),
-            'total_expense': float(total_expense),
+            'total_expense': float(expense_excl_tax),
+            'expense_tax': float(expense_tax),
+            'expense_total_with_tax': float(expense_excl_tax + expense_tax),
+            'expense_count': expense_count,
             'total_purchase': float(total_purchase),
+            'invoice_total': float(invoice_total),
+            'invoice_tax': float(invoice_tax),
+            'invoice_count': invoice_count,
+            'net_profit': float(net_profit),
             'latest_orders': list(latest_orders),
+            'latest_expenses': latest_expenses,
             'monthly_chart': monthly_chart,
             'has_chart_data': has_chart_data,
             'filter_year': year,
