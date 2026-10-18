@@ -4,7 +4,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.http import HttpResponse
 
 from apps.hr.models import Employee, Salary
@@ -55,6 +55,22 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             .order_by('role')
         )
         return Response(list(roles))
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_employees = queryset.count()
+        active_employees = queryset.filter(status='active').count()
+        inactive_employees = total_employees - active_employees
+        monthly_payroll_base = queryset.filter(status='active').aggregate(total=Sum('basic_salary'))['total'] or 0
+        roles_count = queryset.exclude(role='').values('role').distinct().count()
+        return Response({
+            'total_employees': total_employees,
+            'active_employees': active_employees,
+            'inactive_employees': inactive_employees,
+            'monthly_payroll_base': float(monthly_payroll_base),
+            'roles_count': roles_count,
+        })
 
     @action(detail=False, methods=['get'], url_path='all')
     def all_employees(self, request):
@@ -180,6 +196,20 @@ class SalaryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(admin=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_records = queryset.count()
+        total_gross = queryset.aggregate(total=Sum('gross_payment'))['total'] or 0
+        total_net = queryset.aggregate(total=Sum('net_payment'))['total'] or 0
+        total_deductions = queryset.aggregate(total=Sum('total_deductions'))['total'] or 0
+        return Response({
+            'total_records': total_records,
+            'total_gross': float(total_gross),
+            'total_net': float(total_net),
+            'total_deductions': float(total_deductions),
+        })
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

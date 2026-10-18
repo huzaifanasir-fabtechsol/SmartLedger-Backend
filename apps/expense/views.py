@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
 from django.db import IntegrityError, transaction as db_transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.http import HttpResponse
 from django.utils import timezone
 from reportlab.lib.pagesizes import A4
@@ -697,6 +697,23 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         return response
 
     @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_expenses = queryset.count()
+        total_amount = queryset.aggregate(total=Sum('amount'))['total'] or 0
+        total_tax = queryset.aggregate(total=Sum('tax_amount'))['total'] or 0
+        cash_total = queryset.filter(is_cash=True).aggregate(total=Sum('amount'))['total'] or 0
+        bank_total = queryset.filter(is_cash=False).aggregate(total=Sum('amount'))['total'] or 0
+        return Response({
+            'total_expenses': total_expenses,
+            'total_amount': float(total_amount),
+            'total_tax': float(total_tax),
+            'grand_total': float(total_amount + total_tax),
+            'cash_total': float(cash_total),
+            'bank_total': float(bank_total),
+        })
+
+    @action(detail=False, methods=['get'])
     def tax_stats(self, request):
         queryset = self.get_queryset()
 
@@ -1326,6 +1343,19 @@ class RestaurantViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_restaurants = queryset.count()
+        expenses = Expense.objects.filter(restaurant__in=queryset, user=request.user)
+        total_visits = expenses.count()
+        total_spent = expenses.aggregate(total=Sum('amount'))['total'] or 0
+        return Response({
+            'total_restaurants': total_restaurants,
+            'total_visits': total_visits,
+            'total_spent': float(total_spent),
+        })
+
 
 class SparePartViewSet(viewsets.ModelViewSet):
     serializer_class = SparePartSerializer
@@ -1345,3 +1375,16 @@ class SparePartViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_shops = queryset.count()
+        expenses = Expense.objects.filter(spare_part__in=queryset, user=request.user)
+        total_purchases = expenses.count()
+        total_spent = expenses.aggregate(total=Sum('amount'))['total'] or 0
+        return Response({
+            'total_shops': total_shops,
+            'total_purchases': total_purchases,
+            'total_spent': float(total_spent),
+        })

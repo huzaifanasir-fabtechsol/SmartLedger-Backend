@@ -70,6 +70,18 @@ class CarCategoryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_categories = queryset.count()
+        unique_makers = queryset.values('company').distinct().count()
+        total_cars = Car.objects.filter(category__in=queryset, user=request.user).count()
+        return Response({
+            'total_categories': total_categories,
+            'unique_makers': unique_makers,
+            'total_cars': total_cars,
+        })
+
     @action(detail=False, methods=['post'], url_path='bulk-import')
     def bulk_import(self, request):
         from openpyxl import load_workbook
@@ -143,6 +155,20 @@ class CarViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_cars = queryset.count()
+        unique_makers = queryset.filter(category__isnull=False).values('category__company').distinct().count()
+        unique_models = queryset.filter(category__isnull=False).values('category__model').distinct().count()
+        ordered_vehicles = OrderItem.objects.filter(car__in=queryset).values('order').distinct().count()
+        return Response({
+            'total_cars': total_cars,
+            'unique_makers': unique_makers,
+            'unique_models': unique_models,
+            'ordered_vehicles': ordered_vehicles,
+        })
 
 class OrderViewSet(viewsets.ModelViewSet):
     serializer_class = OrderSerializer
@@ -225,6 +251,27 @@ class OrderViewSet(viewsets.ModelViewSet):
             stats[f] = float(agg_results.get(f) or 0)
             
         return Response(stats)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        items = OrderItem.objects.filter(order__in=queryset)
+        total_orders = queryset.count()
+        total_revenue = queryset.aggregate(total=Sum('total_amount'))['total'] or 0
+        completed_orders = queryset.filter(payment_status='completed').count()
+        completed_amount = queryset.filter(payment_status='completed').aggregate(total=Sum('total_amount'))['total'] or 0
+        pending_orders = queryset.filter(payment_status='pending').count()
+        pending_amount = queryset.filter(payment_status='pending').aggregate(total=Sum('total_amount'))['total'] or 0
+        total_vehicles = items.count()
+        return Response({
+            'total_orders': total_orders,
+            'total_revenue': float(total_revenue),
+            'completed_orders': completed_orders,
+            'completed_amount': float(completed_amount),
+            'pending_orders': pending_orders,
+            'pending_amount': float(pending_amount),
+            'total_vehicles': total_vehicles,
+        })
 
     @action(detail=False, methods=['get'])
     def export_tax_xlsx(self, request):
@@ -1628,6 +1675,21 @@ class CustomerViewSet(viewsets.ModelViewSet):
         customer = serializer.save(user=self.request.user)
         _mirror_party_record(customer, Saler)
 
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_customers = queryset.count()
+        orders = Order.objects.filter(customer__in=queryset, user=request.user)
+        active_customers = queryset.filter(orders__isnull=False).distinct().count()
+        total_orders = orders.count()
+        total_revenue = orders.aggregate(total=Sum('total_amount'))['total'] or 0
+        return Response({
+            'total_customers': total_customers,
+            'active_customers': active_customers,
+            'total_orders': total_orders,
+            'total_revenue': float(total_revenue),
+        })
+
 class SalerViewSet(viewsets.ModelViewSet):
     serializer_class = SalerSerializer
     permission_classes = [IsAuthenticated]
@@ -1648,6 +1710,21 @@ class SalerViewSet(viewsets.ModelViewSet):
         saler = serializer.save(user=self.request.user)
         _mirror_party_record(saler, Customer)
 
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_salers = queryset.count()
+        orders = Order.objects.filter(saler__in=queryset, user=request.user)
+        active_salers = queryset.filter(orders__isnull=False).distinct().count()
+        total_orders = orders.count()
+        total_sales = orders.aggregate(total=Sum('total_amount'))['total'] or 0
+        return Response({
+            'total_salers': total_salers,
+            'active_salers': active_salers,
+            'total_orders': total_orders,
+            'total_sales': float(total_sales),
+        })
+
 class CompanyAccountViewSet(viewsets.ModelViewSet):
     serializer_class = CompanyAccountSerializer
     permission_classes = [IsAuthenticated]
@@ -1666,6 +1743,21 @@ class CompanyAccountViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_accounts = queryset.count()
+        txs = Transaction.objects.filter(company_account__in=queryset, user=request.user)
+        total_deposits = txs.aggregate(total=Sum('deposit'))['total'] or 0
+        total_withdrawals = txs.aggregate(total=Sum('withdraw'))['total'] or 0
+        net_balance = total_deposits - total_withdrawals
+        return Response({
+            'total_accounts': total_accounts,
+            'total_deposits': float(total_deposits),
+            'total_withdrawals': float(total_withdrawals),
+            'net_balance': float(net_balance),
+        })
+
 class AuctionViewSet(viewsets.ModelViewSet):
     serializer_class = AuctionSerializer
     permission_classes = [IsAuthenticated]
@@ -1683,6 +1775,21 @@ class AuctionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_auctions = queryset.count()
+        orders = Order.objects.filter(auction__in=queryset, user=request.user)
+        active_auctions = queryset.filter(orders__isnull=False).distinct().count()
+        total_orders = orders.count()
+        total_volume = orders.aggregate(total=Sum('total_amount'))['total'] or 0
+        return Response({
+            'total_auctions': total_auctions,
+            'active_auctions': active_auctions,
+            'total_orders': total_orders,
+            'total_volume': float(total_volume),
+        })
 
     @action(detail=False, methods=['post'], url_path='bulk-import')
     def bulk_import(self, request):
@@ -1766,6 +1873,20 @@ class TransactionViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(company_account_id=company_account)
             
         return queryset
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.get_queryset()
+        total_transactions = queryset.count()
+        total_deposits = queryset.aggregate(total=Sum('deposit'))['total'] or 0
+        total_withdrawals = queryset.aggregate(total=Sum('withdraw'))['total'] or 0
+        net_cashflow = total_deposits - total_withdrawals
+        return Response({
+            'total_transactions': total_transactions,
+            'total_deposits': float(total_deposits),
+            'total_withdrawals': float(total_withdrawals),
+            'net_cashflow': float(net_cashflow),
+        })
 
     def perform_create(self, serializer):
         company_account = serializer.validated_data.get('company_account')

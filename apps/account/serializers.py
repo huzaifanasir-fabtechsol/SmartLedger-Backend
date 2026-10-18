@@ -58,7 +58,11 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'tax_rate', 'has_lock_pin']
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name', 'company_name',
+            'company_email', 'company_phone', 'company_website', 'company_address',
+            'business_registration', 'tax_rate', 'has_lock_pin'
+        ]
 
     def get_has_lock_pin(self, obj):
         return bool(obj.lock_pin)
