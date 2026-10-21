@@ -176,6 +176,18 @@ def compute_statements(user, fy, raw_inputs=None):
             f'The balance sheet does not balance (assets {assets_total:,} - liabilities and net assets {liab_eq:,} = '
             f'{difference:,}). Check your inputs.'))
 
+    # Signs of a term started without its opening balances (the usual cause of an unbalanced sheet).
+    if fy.term_no > 1 and inputs['capital'] == 0 and inputs['opening_retained_earnings'] == 0:
+        warnings.append((
+            f'第{fy.term_no}期の資本金と期首の繰越利益剰余金が0です。前期から繰り越してください(「次期を開始」)。',
+            f'Capital and opening retained earnings are both 0 for term {fy.term_no}. Carry the balances forward from '
+            'the previous term ("Start next term") or enter them.'))
+    if purchases > 0 and inputs['closing_inventory'] == 0 and purchases > sales:
+        warnings.append((
+            '商品仕入高があるのに期末商品棚卸高が0です。売れ残りの車両があれば棚卸資産に計上してください。',
+            'There are merchandise purchases but the closing inventory is 0. Vehicles still unsold at year end belong '
+            'in inventory, not in cost of sales.'))
+
     bs = {
         'current_assets': current_assets, 'current_assets_total': current_total,
         'tangible_assets': tangible_assets, 'investments': investments, 'fixed_assets_total': fixed_total,

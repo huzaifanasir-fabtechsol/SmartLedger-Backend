@@ -1,4 +1,6 @@
 """Compute everything needed for the full filing package in one dict."""
+import datetime
+
 from . import consumption_tax, corporate_tax, local_tax, schedules
 from .inputs import normalize_inputs
 from .statements import compute_statements
@@ -106,3 +108,60 @@ def auto_values(user, fy):
             'corporate.unpaid_city': [['Municipal inhabitant tax payable', second['local']['city_total_payable']]],
         },
     }
+
+
+def _next_period(fy):
+    """The 12 months following ``fy`` (start = day after the end; end = last day of the same month next year)."""
+    start = fy.end_date + datetime.timedelta(days=1)
+    end = datetime.date(start.year + 1, start.month, 1) - datetime.timedelta(days=1)
+    return start, end
+
+
+def roll_forward(user, fy):
+    """Create the next fiscal year seeded with ``fy``'s closing balances.
+
+    Carried: capital, retained earnings, inventory, balance-sheet lists (receivables, deposits, loans,
+    payables ...), the provision for taxes, fixed assets at their closing book value, and loss
+    carry-forwards. Not carried: sales/purchases/cash overrides, one-off flows (extra SG&A, non-operating
+    items, taxes booked) and tax-period settings. Settled items (e.g. last year's taxes payable or a tax
+    refund received) still need to be edited by the user, which is why the lists are copied, not guessed.
+    """
+    from django.db import transaction
+
+    from apps.reports.models import FiscalYear, FixedAsset, StatementInput
+
+    if FiscalYear.objects.filter(user=user, term_no=fy.term_no + 1).exists():
+        raise ValueError(f'Term {fy.term_no + 1} already exists.')
+    data = compute_package(user, fy)
+    inputs, bs, corp = data['_inputs'], data['bs'], data['corporate']
+    start, end = _next_period(fy)
+
+    losses = [{'label': r['label'], 'amount': r['carry']} for r in corp['form7']['rows'] if r['carry']]
+    if corp['form7']['current_loss']:
+        losses.append({'label': f"{fy.start_date:%Y-%m-%d} to {fy.end_date:%Y-%m-%d}",
+                       'amount': corp['form7']['current_loss']})
+    seed = normalize_inputs({
+        'capital': bs['capital'],
+        'opening_retained_earnings': bs['retained_earnings'],
+        'opening_inventory': inputs['closing_inventory'],
+        'other_current_assets': inputs['other_current_assets'],
+        'investments': inputs['investments'],
+        'current_liabilities': inputs['current_liabilities'],
+        'fixed_liabilities': inputs['fixed_liabilities'],
+        'rent_details': inputs['rent_details'],
+        'include_salaries': inputs['include_salaries'],
+        'tax': {'corporate': {'prior_losses': losses,
+                              'opening_provision': corp['form5_2']['provision'][41]}},
+    })
+    with transaction.atomic():
+        new_fy = FiscalYear.objects.create(user=user, term_no=fy.term_no + 1, start_date=start, end_date=end)
+        StatementInput.objects.create(fiscal_year=new_fy, data=seed)
+        for row in data['_dep_rows']:
+            asset = row['asset']
+            if row['closing'] <= 0:
+                continue                                     # fully written off
+            FixedAsset.objects.create(
+                fiscal_year=new_fy, name=asset.name, category=asset.category, acquired_on=asset.acquired_on,
+                cost=asset.cost, method=asset.method, useful_life=asset.useful_life,
+                opening_book_value=row['closing'])
+    return new_fy

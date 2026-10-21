@@ -9,7 +9,7 @@ from decimal import Decimal
 from apps.account.models import User
 from apps.expense.models import Expense, ExpenseCategory
 from apps.revenue.models import Order
-from apps.reports.models import CompanyProfile, FiscalYear
+from apps.reports.models import CompanyProfile, FiscalYear, StatementInput
 from apps.reports.pdf.i18n import tr
 from apps.reports.pdf.package import UnknownPart, build_package
 from apps.reports.services.corporate_tax import corporate_tax_amount
@@ -278,3 +278,70 @@ class AutoValueTests(TestCase):
         other = User.objects.create_user(username='o', email='o@example.com', password='x')
         fy = FiscalYear.objects.create(user=other, term_no=1, start_date=D(2025, 1, 1), end_date=D(2025, 12, 31))
         self.assertEqual(self.client.get(f'/api/reports/fiscal-years/{fy.id}/auto-values/').status_code, 404)
+
+
+class RollForwardTests(TestCase):
+    """Starting the next term must carry closing balances so the new balance sheet can reconcile."""
+
+    def setUp(self):
+        setup(self)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.url = f'/api/reports/fiscal-years/{self.fy.id}/roll-forward/'
+
+    def test_carries_balances_assets_and_losses(self):
+        resp = self.client.post(self.url)
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        new_fy = FiscalYear.objects.get(id=resp.data['id'])
+        self.assertEqual((new_fy.term_no, new_fy.start_date, new_fy.end_date), (6, D(2026, 1, 1), D(2026, 12, 31)))
+        data = new_fy.inputs.data
+        self.assertEqual(data['capital'], 5000000)
+        self.assertEqual(data['opening_retained_earnings'], -10950735)
+        self.assertEqual(data['opening_inventory'], 2377190)
+        self.assertEqual(sum(i['amount'] for i in data['current_liabilities']), 10834858)
+        self.assertEqual(sum(i['amount'] for i in data['tax']['corporate']['prior_losses']), 7121635)
+        self.assertEqual(data['tax']['corporate']['opening_provision'], 204100)
+        self.assertEqual(data['sales'], None)                         # flows are not carried
+        self.assertEqual(data['extra_sga'], [])
+        assets = {a.name: a.opening_book_value for a in new_fy.fixed_assets.all()}
+        self.assertEqual(assets['簡易建物'], 704031)
+        self.assertEqual(assets['iPhone'], 58842)
+        self.assertEqual(assets['創立費'], 184700)
+
+    def test_new_term_balances_once_cash_and_inventory_are_entered(self):
+        new_fy = FiscalYear.objects.get(id=self.client.post(self.url).data['id'])
+        record = new_fy.inputs
+        record.data = {**record.data, 'cash': 84973, 'closing_inventory': 2377190, 'sales': 0, 'purchases': 0}
+        record.save()
+        data = compute_package(self.user, new_fy)
+        self.assertTrue(data['bs']['balanced'], data['bs']['difference'])
+        self.assertEqual(data['pl']['cost_of_sales'], 0)
+        self.assertEqual(data['bs']['equity_total'], -5950735 - data['pl']['sga_total'])
+
+    def test_second_roll_forward_and_foreign_year_rejected(self):
+        self.assertEqual(self.client.post(self.url).status_code, status.HTTP_201_CREATED)
+        self.assertEqual(self.client.post(self.url).status_code, status.HTTP_400_BAD_REQUEST)
+        other = User.objects.create_user(username='o', email='o@example.com', password='x')
+        fy = FiscalYear.objects.create(user=other, term_no=1, start_date=D(2025, 1, 1), end_date=D(2025, 12, 31))
+        self.assertEqual(self.client.post(f'/api/reports/fiscal-years/{fy.id}/roll-forward/').status_code, 404)
+
+
+class ReconciliationWarningTests(TestCase):
+    def setUp(self):
+        setup(self)
+
+    def test_unseeded_later_term_is_flagged_and_the_pdf_is_marked_draft(self):
+        fy = FiscalYear.objects.create(user=self.user, term_no=6, start_date=D(2026, 1, 1), end_date=D(2026, 12, 31))
+        StatementInput.objects.create(fiscal_year=fy, data={'cash': 1066214, 'sales': 0, 'purchases': 496430})
+        data = compute_package(self.user, fy)
+        text = ' '.join(w[1] for w in data['warnings'])
+        self.assertIn('Capital and opening retained earnings are both 0', text)
+        self.assertIn('closing inventory is 0', text)
+        self.assertIn('does not balance', text)
+        self.assertFalse(data['bs']['balanced'])
+        # still renders, with the draft banner drawn (smoke): the unbalanced data must not break the writer
+        self.assertTrue(build_package(data, ['kessan'], 'en', 'full').getvalue().startswith(b'%PDF'))
+
+    def test_reconciled_filing_year_has_no_warnings(self):
+        data = compute_package(self.user, self.fy)
+        self.assertEqual(data['warnings'], [])

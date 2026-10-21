@@ -11,7 +11,7 @@ from .pdf.package import MODES, PARTS, UnknownPart, build_package
 from .serializers import (CompanyProfileSerializer, FiscalYearSerializer, FixedAssetSerializer,
                           StatementInputSerializer)
 from .services.inputs import normalize_inputs
-from .services.package import auto_values, compute_package, public_view
+from .services.package import auto_values, compute_package, public_view, roll_forward
 
 
 def _get_profile(user):
@@ -63,6 +63,15 @@ class FiscalYearViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def preview(self, request, pk=None):
         return Response(public_view(compute_package(request.user, self.get_object())))
+
+    @action(detail=True, methods=['post'], url_path='roll-forward')
+    def roll_forward(self, request, pk=None):
+        """Start the next term from this term's closing balances."""
+        try:
+            new_year = roll_forward(request.user, self.get_object())
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(FiscalYearSerializer(new_year).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='auto-values')
     def auto_values(self, request, pk=None):

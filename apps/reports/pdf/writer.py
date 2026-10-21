@@ -97,6 +97,13 @@ class Writer:
         c.drawCentredString(PAGE_W / 2, 24, str(self.page))
         c.drawRightString(PAGE_W - MARGIN, 24, self.t(('参考資料(申告書そのものではありません)',
                                                        'Working copy - not a tax filing')))
+        bs = self.data.get('bs')
+        if bs and not bs['balanced']:
+            c.setFillColor(colors.Color(0.8, 0.1, 0.1))
+            c.setFont(self.font, 8)
+            c.drawCentredString(PAGE_W / 2, 34, self.t((
+                f"下書き: 貸借が一致していません (差額 {bs['difference']:,} 円)。提出しないでください。",
+                f"DRAFT - balance sheet does not balance (difference {bs['difference']:,}). Do not file.")))
         c.setFillColor(colors.black)
 
     def new_page(self):
