@@ -2,7 +2,7 @@
 import datetime
 
 from . import consumption_tax, corporate_tax, local_tax, readiness, schedules
-from apps.revenue.models import CompanyAccount, Transaction
+from apps.revenue.models import CompanyAccount, OrderItem, Transaction
 
 from .inputs import normalize_inputs
 from .statements import compute_statements
@@ -60,6 +60,37 @@ CONSUMPTION_OVERRIDES = ('sales_incl_10', 'sales_incl_8', 'nontaxable_sales', 'p
 CORPORATE_OVERRIDES = ('entertainment_expenses', 'unpaid_corporate', 'unpaid_pref', 'unpaid_city')
 
 
+def unsold_cars(user, fy):
+    """Reference list: cars with a recorded *purchase* on/before the period end and no recorded sale by then.
+
+    This is only as complete as the orders in the system (cars are often entered only on the sale invoice),
+    so it is shown for comparison with the physical stock, never used automatically.
+    """
+    sold_ids = set(OrderItem.objects.filter(
+        order__user=user, order__transaction_type='sale', order__transaction_date__lte=fy.end_date,
+        vehicle_price__gt=0).values_list('car_id', flat=True))
+    bought = (OrderItem.objects
+              .filter(order__user=user, order__transaction_type='purchase', order__transaction_date__lte=fy.end_date,
+                      vehicle_price__gt=0)
+              .exclude(car_id__in=sold_ids).select_related('car', 'car__category', 'order')
+              .order_by('order__transaction_date', 'id'))
+    cars, seen = [], set()
+    for item in bought:
+        if item.car_id in seen:
+            continue
+        seen.add(item.car_id)
+        parts = [item.vehicle_price, item.successful_bid, item.listing_fee, item.commission_fee,
+                 item.transport_fee, item.registration_fee, item.recycle_fee]
+        category = item.car.category
+        cars.append({
+            'id': item.car_id, 'chassis': item.car.chassis_number,
+            'name': f'{category.company} {category.model}'.strip() if category else '',
+            'bought_on': item.order.transaction_date.isoformat(), 'order': item.order.order_number,
+            'cost_excl_tax': int(round(sum(p or 0 for p in parts))), 'invoice_total': int(round(item.subtotal or 0)),
+        })
+    return cars
+
+
 def auto_values(user, fy):
     """What every overridable figure would be if left on Auto, plus the pieces it is made of.
 
@@ -93,6 +124,7 @@ def auto_values(user, fy):
     ent_lines = [[i['label'], i['amount']] for i in second['pl']['sga_items'] if '交際' in i['label']]
     return {
         'sales': pl['sales'], 'purchases': pl['purchases'], 'cash': cash, 'accounts': accounts,
+        'unsold_cars': unsold_cars(user, fy),
         'consumption': {
             'sales_incl_10': s['incl_10'], 'sales_incl_8': s['incl_8'], 'nontaxable_sales': s['nontaxable'],
             'purchase_incl_10': ct['purchases']['incl_10'], 'purchase_incl_8': ct['purchases']['incl_8'],

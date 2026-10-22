@@ -434,3 +434,45 @@ class ReadinessTests(TestCase):
         keys = [i['key'] for i in resp.data['readiness']]
         self.assertEqual(keys[:3], ['company', 'period', 'opening'])
         self.assertEqual(len(keys), 13)
+
+
+class UnsoldCarsTests(TestCase):
+    """Reference list of cars bought but not (yet) recorded as sold."""
+
+    def setUp(self):
+        setup(self)
+        from apps.revenue.models import Car, CarCategory, OrderItem
+        category = CarCategory.objects.create(user=self.user, company='TOYOTA', model='Roomy')
+        self.stock = Car.objects.create(user=self.user, category=category, chassis_number='A1', year=2020)
+        self.sold = Car.objects.create(user=self.user, category=category, chassis_number='B2', year=2021)
+        self.later = Car.objects.create(user=self.user, category=category, chassis_number='C3', year=2022)
+
+        def order(number, kind, day):
+            return Order.objects.create(user=self.user, order_number=number, transaction_type=kind,
+                                        transaction_catagory='local', transaction_date=day, total_amount=1)
+        buy_stock, buy_sold = order('P1', 'purchase', D(2025, 3, 1)), order('P2', 'purchase', D(2025, 4, 1))
+        sell = order('S1', 'sale', D(2025, 9, 1))
+        buy_later, sell_later = order('P3', 'purchase', D(2025, 6, 1)), order('S2', 'sale', D(2026, 2, 1))
+        OrderItem.objects.create(order=buy_stock, car=self.stock, vehicle_price=430000, successful_bid=13000,
+                                 subtotal=496430)
+        OrderItem.objects.create(order=buy_sold, car=self.sold, vehicle_price=500000, subtotal=550000)
+        OrderItem.objects.create(order=sell, car=self.sold, vehicle_price=700000, subtotal=770000)
+        OrderItem.objects.create(order=buy_later, car=self.later, vehicle_price=300000, subtotal=330000)
+        OrderItem.objects.create(order=sell_later, car=self.later, vehicle_price=400000, subtotal=440000)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_lists_only_cars_without_a_sale_by_period_end(self):
+        cars = self.client.get(f'/api/reports/fiscal-years/{self.fy.id}/auto-values/').data['unsold_cars']
+        by_chassis = {c['chassis']: c for c in cars}
+        self.assertEqual(set(by_chassis), {'A1', 'C3'})     # B2 sold in 2025; C3 sold only in 2026
+        self.assertEqual(by_chassis['A1']['cost_excl_tax'], 443000)
+        from apps.revenue.models import OrderItem
+        stored = OrderItem.objects.get(car=self.stock).subtotal      # the model computes the subtotal itself
+        self.assertEqual(by_chassis['A1']['invoice_total'], int(stored))
+        self.assertEqual(by_chassis['A1']['name'], 'TOYOTA Roomy')
+
+    def test_reference_only_never_changes_the_statements(self):
+        before = compute_package(self.user, self.fy)['pl']['closing_inventory']
+        self.client.get(f'/api/reports/fiscal-years/{self.fy.id}/auto-values/')
+        self.assertEqual(compute_package(self.user, self.fy)['pl']['closing_inventory'], before)
