@@ -1,7 +1,7 @@
 """Compute everything needed for the full filing package in one dict."""
 import datetime
 
-from . import consumption_tax, corporate_tax, local_tax, schedules
+from . import consumption_tax, corporate_tax, local_tax, readiness, schedules
 from apps.revenue.models import CompanyAccount, Transaction
 
 from .inputs import normalize_inputs
@@ -35,6 +35,7 @@ def compute_package(user, fy, raw_inputs=None):
         notes.append((f'別表五(一)の差引合計と繰越利益剰余金に {diff:,} の差があります。未納税額を入力してください。',
                       f'Schedule 5-(1) total differs from retained earnings by {diff:,}. Enter the unpaid tax balances.'))
     data['tax_notes'] = notes + corp['warnings'] + local['warnings'] + data['consumption']['warnings']
+    data['readiness'] = readiness.compute(user, fy, data, profile)
     return data
 
 

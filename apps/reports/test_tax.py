@@ -397,3 +397,40 @@ class CashAccountSelectionTests(TestCase):
         resp = self.client.put(f'/api/reports/fiscal-years/{self.fy.id}/inputs/',
                                {'data': {'cash_accounts': ['x']}}, format='json')
         self.assertEqual(resp.status_code, 400)
+
+
+class ReadinessTests(TestCase):
+    def setUp(self):
+        setup(self)
+
+    def statuses(self, fy):
+        return {i['key']: i['status'] for i in compute_package(self.user, fy)['readiness']}
+
+    def test_filing_year_is_mostly_ready(self):
+        s = self.statuses(self.fy)
+        for key in ('opening', 'inventory', 'assets', 'consumption', 'balance', 'period', 'sales'):
+            self.assertIn(s[key], ('ok', 'check'), key)
+        self.assertEqual(s['balance'], 'ok')
+        self.assertEqual(s['consumption'], 'ok')           # purchase totals were entered
+        self.assertEqual(s['opening'], 'ok')
+        self.assertEqual(s['company'], 'todo')              # no tax office / corporate number in the fixture
+
+    def test_unseeded_year_lists_what_to_fix(self):
+        fy = FiscalYear.objects.create(user=self.user, term_no=6, start_date=D(2026, 1, 19), end_date=D(2026, 10, 19))
+        StatementInput.objects.create(fiscal_year=fy, data={'purchases': 500000})
+        items = {i['key']: i for i in compute_package(self.user, fy)['readiness']}
+        self.assertEqual(items['opening']['status'], 'todo')
+        self.assertEqual(items['opening']['tab'], 'year')
+        self.assertEqual(items['inventory']['status'], 'todo')
+        self.assertEqual(items['period']['status'], 'check')
+        self.assertEqual(items['balance']['status'], 'todo')
+        self.assertEqual(items['consumption']['status'], 'todo')
+
+    def test_readiness_is_in_the_preview_api(self):
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        resp = client.get(f'/api/reports/fiscal-years/{self.fy.id}/preview/')
+        self.assertEqual(resp.status_code, 200)
+        keys = [i['key'] for i in resp.data['readiness']]
+        self.assertEqual(keys[:3], ['company', 'period', 'opening'])
+        self.assertEqual(len(keys), 13)
