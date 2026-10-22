@@ -34,9 +34,12 @@ def _row(item):
             'label': item['label']}
 
 
-def _bank_rows(user, fy, cash_total):
+def _bank_rows(user, fy, cash_total, account_ids=None):
     rows, listed = [], 0
-    for account in CompanyAccount.objects.filter(user=user):
+    accounts = CompanyAccount.objects.filter(user=user)
+    if account_ids is not None:
+        accounts = accounts.filter(id__in=account_ids)
+    for account in accounts:
         last = (Transaction.objects.filter(company_account=account, date__lte=fy.end_date)
                 .order_by('-date', '-id').first())
         if last:
@@ -160,7 +163,7 @@ def compute(user, fy, data, corp, local, consumption, profile=None):
             refund_reasons.append('business_start')
 
     return {
-        'deposits': _bank_rows(user, fy, cash_total),
+        'deposits': _bank_rows(user, fy, cash_total, inputs['cash_accounts']),
         'receivables': pick(assets, 'receivable'),
         'advances': pick(assets, 'advance'),
         'loans': pick(assets, 'loan'),

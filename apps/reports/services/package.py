@@ -2,6 +2,8 @@
 import datetime
 
 from . import consumption_tax, corporate_tax, local_tax, schedules
+from apps.revenue.models import CompanyAccount, Transaction
+
 from .inputs import normalize_inputs
 from .statements import compute_statements
 
@@ -78,9 +80,18 @@ def auto_values(user, fy):
     cash = next((i['amount'] for i in first['bs']['current_assets'] if i['label'] == '現金及び預金'), 0)
     comp, s = ct['components'], ct['sales']
     unpaid = corp['form5_1']['unpaid']
+    selected = raw['cash_accounts']
+    accounts = []
+    for account in CompanyAccount.objects.filter(user=user).order_by('id'):
+        last = (Transaction.objects.filter(company_account=account, date__lte=fy.end_date)
+                .order_by('-date', '-id').first())
+        accounts.append({'id': account.id, 'label': f'{account.bank_name} {account.account_number}'.strip(),
+                         'balance': int(round(last.balance)) if last else 0,
+                         'transactions': account.transactions.count(),
+                         'selected': selected is None or account.id in selected})
     ent_lines = [[i['label'], i['amount']] for i in second['pl']['sga_items'] if '交際' in i['label']]
     return {
-        'sales': pl['sales'], 'purchases': pl['purchases'], 'cash': cash,
+        'sales': pl['sales'], 'purchases': pl['purchases'], 'cash': cash, 'accounts': accounts,
         'consumption': {
             'sales_incl_10': s['incl_10'], 'sales_incl_8': s['incl_8'], 'nontaxable_sales': s['nontaxable'],
             'purchase_incl_10': ct['purchases']['incl_10'], 'purchase_incl_8': ct['purchases']['incl_8'],

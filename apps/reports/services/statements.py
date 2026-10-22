@@ -41,9 +41,13 @@ def _order_total(user, fy, transaction_type):
     return _yen(qs.aggregate(t=Sum('total_amount'))['t'])
 
 
-def _bank_cash(user, end_date):
+def _bank_cash(user, end_date, account_ids=None):
+    """Sum of each bank account's latest balance on/before end_date (only ``account_ids`` when given)."""
     total = 0
-    for account in CompanyAccount.objects.filter(user=user):
+    accounts = CompanyAccount.objects.filter(user=user)
+    if account_ids is not None:
+        accounts = accounts.filter(id__in=account_ids)
+    for account in accounts:
         last = (Transaction.objects
                 .filter(company_account=account, date__lte=end_date)
                 .order_by('-date', '-id').first())
@@ -141,7 +145,7 @@ def compute_statements(user, fy, raw_inputs=None):
     }
 
     # ---- Balance sheet ---------------------------------------------------------------
-    cash = pick('cash', lambda: _bank_cash(user, fy.end_date))
+    cash = pick('cash', lambda: _bank_cash(user, fy.end_date, inputs['cash_accounts']))
     current_assets = []
     if cash:
         current_assets.append({'label': '現金及び預金', 'amount': cash})

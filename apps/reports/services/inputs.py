@@ -62,6 +62,7 @@ DEFAULTS = {
     'cash': None,
     'include_salaries': False,
     'notes_extra': [],
+    'cash_accounts': None,     # ids of the CompanyAccounts that belong on the balance sheet (None = all)
 }
 DEFAULTS.update({k: 0 for k in INT_KEYS})
 DEFAULTS.update({k: [] for k in LIST_KEYS})
@@ -134,6 +135,13 @@ def normalize_inputs(data):
             out[key] = _normalize_list(value, key)
         elif key == 'include_salaries':
             out[key] = bool(value)
+        elif key == 'cash_accounts':
+            if value is None:
+                out[key] = None
+            elif isinstance(value, list) and all(isinstance(v, int) and not isinstance(v, bool) for v in value):
+                out[key] = sorted(set(value))
+            else:
+                raise InputError('cash_accounts must be a list of account ids or null')
         elif key == 'notes_extra':
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 raise InputError('notes_extra must be a list of strings')

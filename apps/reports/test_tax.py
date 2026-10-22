@@ -345,3 +345,55 @@ class ReconciliationWarningTests(TestCase):
     def test_reconciled_filing_year_has_no_warnings(self):
         data = compute_package(self.user, self.fy)
         self.assertEqual(data['warnings'], [])
+
+
+class CashAccountSelectionTests(TestCase):
+    """Only the bank accounts that are on the company's books should count as cash."""
+
+    def setUp(self):
+        setup(self)
+        from apps.revenue.models import CompanyAccount, Transaction
+        self.company_acct = CompanyAccount.objects.create(user=self.user, bank_name='GMO', account_number='1',
+                                                          branch_code='1', account_holder='co')
+        self.other_acct = CompanyAccount.objects.create(user=self.user, bank_name='Personal', account_number='2',
+                                                        branch_code='1', account_holder='me')
+        Transaction.objects.create(user=self.user, company_account=self.company_acct, date=D(2025, 12, 29),
+                                   balance=84973, description='t')
+        Transaction.objects.create(user=self.user, company_account=self.other_acct, date=D(2025, 12, 30),
+                                   balance=469176, description='t')
+        record = self.fy.inputs
+        record.data = {k: v for k, v in SAMPLE_INPUTS.items() if k != 'cash'}
+        record.save()
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def cash(self):
+        return compute_package(self.user, self.fy)['bs']['current_assets'][0]['amount']
+
+    def test_all_accounts_count_by_default(self):
+        self.assertEqual(self.cash(), 84973 + 469176)
+
+    def test_selection_limits_cash_and_the_deposit_schedule(self):
+        record = self.fy.inputs
+        record.data = {**record.data, 'cash_accounts': [self.company_acct.id]}
+        record.save()
+        data = compute_package(self.user, self.fy)
+        self.assertEqual(self.cash(), 84973)
+        self.assertEqual([d['amount'] for d in data['schedules']['deposits']], [84973])
+        self.assertTrue(data['bs']['balanced'])          # matches the filed balance sheet
+
+    def test_auto_values_list_accounts_and_ignore_nothing_else(self):
+        record = self.fy.inputs
+        record.data = {**record.data, 'cash_accounts': [self.company_acct.id]}
+        record.save()
+        data = self.client.get(f'/api/reports/fiscal-years/{self.fy.id}/auto-values/').data
+        by_id = {a['id']: a for a in data['accounts']}
+        self.assertEqual(by_id[self.company_acct.id]['balance'], 84973)
+        self.assertTrue(by_id[self.company_acct.id]['selected'])
+        self.assertFalse(by_id[self.other_acct.id]['selected'])
+        self.assertEqual(data['cash'], 84973)
+
+    def test_invalid_selection_rejected(self):
+        resp = self.client.put(f'/api/reports/fiscal-years/{self.fy.id}/inputs/',
+                               {'data': {'cash_accounts': ['x']}}, format='json')
+        self.assertEqual(resp.status_code, 400)
