@@ -129,16 +129,24 @@ def finish_schedule5(data, corp, local):
     prov_increase = pl['taxes_total']
     prov_decrease = prov_opening + prov_increase - prov_closing
 
-    unpaid_corp = c['unpaid_corporate'] if c['unpaid_corporate'] is not None else corp['corp_payable'] + corp['local_payable']
-    unpaid_pref = c['unpaid_pref'] if c['unpaid_pref'] is not None else local['pref_total_payable']
-    unpaid_city = c['unpaid_city'] if c['unpaid_city'] is not None else local['city_total_payable']
+    # unpaid at year end = unpaid at start + accrued this year - paid this year (unless typed in)
+    accrued = {'corporate': corp['corp_payable'] + corp['local_payable'],
+               'pref': local['pref_total_payable'], 'city': local['city_total_payable']}
+    opening = {k: c[f'opening_unpaid_{k}'] for k in accrued}
+    paid = {k: c[f'paid_{k}'] for k in accrued}
+    closing = {k: c[f'unpaid_{k}'] if c[f'unpaid_{k}'] is not None else opening[k] + accrued[k] - paid[k]
+               for k in accrued}
+    unpaid_corp, unpaid_pref, unpaid_city = closing['corporate'], closing['pref'], closing['city']
 
     rows = [  # (code, label, opening, decrease, increase, closing)
         (25, ('繰越損益金', 'Retained earnings (P&L carry-forward)'), opening_ret, opening_ret, closing_ret, closing_ret),
         (26, ('納税充当金', 'Provision for taxes'), prov_opening, prov_decrease, prov_increase, prov_closing),
-        (27, ('未納法人税及び未納地方法人税', 'Unpaid corporate tax & local corporate tax'), 0, 0, -unpaid_corp, -unpaid_corp),
-        (29, ('未納道府県民税', 'Unpaid prefectural inhabitant tax'), 0, 0, -unpaid_pref, -unpaid_pref),
-        (30, ('未納市町村民税', 'Unpaid municipal inhabitant tax'), 0, 0, -unpaid_city, -unpaid_city),
+        (27, ('未納法人税及び未納地方法人税', 'Unpaid corporate tax & local corporate tax'), -opening['corporate'],
+         -paid['corporate'], -(unpaid_corp - opening['corporate'] + paid['corporate']), -unpaid_corp),
+        (29, ('未納道府県民税', 'Unpaid prefectural inhabitant tax'), -opening['pref'],
+         -paid['pref'], -(unpaid_pref - opening['pref'] + paid['pref']), -unpaid_pref),
+        (30, ('未納市町村民税', 'Unpaid municipal inhabitant tax'), -opening['city'],
+         -paid['city'], -(unpaid_city - opening['city'] + paid['city']), -unpaid_city),
     ]
     closing_sum = sum(r[5] for r in rows)
     corp['form5_1'] = {'rows': rows, 'closing_total': closing_sum,
@@ -148,14 +156,16 @@ def finish_schedule5(data, corp, local):
                        'increase_total': sum(r[4] for r in rows),
                        'difference': closing_sum - closing_ret}
 
-    def tax_row(code, label, accrued):
-        return (code, label, 0, accrued, 0, accrued)   # opening, accrued, paid, closing
+    def tax_row(code, label, accrued_now, opening_now=0, paid_now=0):
+        return (code, label, opening_now, accrued_now, paid_now, opening_now + accrued_now - paid_now)
     corp['form5_2'] = {
         'rows': [
-            tax_row(1, ('法人税', 'Corporate tax'), corp['corp_payable']),
+            tax_row(1, ('法人税', 'Corporate tax'), corp['corp_payable'], opening['corporate'], paid['corporate']),
             tax_row(2, ('地方法人税', 'Local corporate tax'), corp['local_payable']),
-            tax_row(6, ('道府県民税 (均等割・法人税割)', 'Prefectural inhabitant tax'), local['pref_inhabitant_total']),
-            tax_row(11, ('市町村民税 (均等割・法人税割)', 'Municipal inhabitant tax'), local['city_total']),
+            tax_row(6, ('道府県民税 (均等割・法人税割)', 'Prefectural inhabitant tax'), local['pref_inhabitant_total'],
+                    opening['pref'], paid['pref']),
+            tax_row(11, ('市町村民税 (均等割・法人税割)', 'Municipal inhabitant tax'), local['city_total'],
+                    opening['city'], paid['city']),
             tax_row(16, ('事業税・特別法人事業税', 'Enterprise tax & special enterprise tax'),
                     local['business_total'] + local['special_total']),
         ],

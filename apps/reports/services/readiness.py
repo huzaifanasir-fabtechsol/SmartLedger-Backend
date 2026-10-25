@@ -62,6 +62,19 @@ def compute(user, fy, data, profile):
     else:
         add('cash', 'Cash and bank balances', 'ok', f"Cash and deposits: ¥{sum(i['amount'] for i in bs['current_assets'] if i['label'] == '現金及び預金'):,}.", 'inputs')
 
+    # 4b. Balances carried over from last year: each must be updated to its 31 Dec position
+    carried = (inputs['other_current_assets'] + inputs['investments'] + inputs['current_liabilities']
+               + inputs['fixed_liabilities'])
+    if fy.term_no > 1 and carried:
+        names = ', '.join(f"{i['label']} ¥{i['amount']:,}" for i in carried)
+        tax_c = inputs['tax']['corporate']
+        unpaid = tax_c['opening_unpaid_corporate'] + tax_c['opening_unpaid_pref'] + tax_c['opening_unpaid_city']
+        paid = tax_c['paid_corporate'] + tax_c['paid_pref'] + tax_c['paid_city']
+        extra = (f" Last year's taxes of ¥{unpaid:,} were unpaid at the start of the year: enter what was paid under "
+                 'Tax settings.') if unpaid and not paid else ''
+        add('carried', 'Balances carried over from last year', 'check',
+            f'Update each to its position on the last day of the year: {names}.{extra}', 'inputs')
+
     # 5. Sales
     if inputs['sales'] is not None:
         add('sales', 'Sales', 'ok', f"Sales entered manually: ¥{pl['sales']:,}.", 'inputs')

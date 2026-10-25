@@ -41,7 +41,8 @@ TAX_DEFAULTS = {
         'sales_incl_10': None, 'sales_incl_8': None, 'nontaxable_sales': None,
         'purchase_incl_10': None, 'purchase_incl_8': None,
         'purchase_returns_10': 0, 'purchase_returns_8': 0,
-        'transitional_incl_10': 0, 'transitional_incl_8': 0,   # 経過措置 80% purchases (tax-included)
+        'transitional_incl_10': 0, 'transitional_incl_8': 0,   # 経過措置 80% purchases (tax-included, to 2026-09-30)
+        'transitional50_incl_10': 0, 'transitional50_incl_8': 0,   # 経過措置 50% purchases (from 2026-10-01)
         'interim_paid': 0, 'interim_paid_local': 0,
         'refund_note': '',
     },
@@ -52,6 +53,9 @@ TAX_DEFAULTS = {
         'entertainment_expenses': None, 'entertainment_food': 0,
         'opening_provision': 0,
         'unpaid_corporate': None, 'unpaid_pref': None, 'unpaid_city': None,
+        # 別表五(一)(二): taxes still unpaid at the start of the year and payments made during it
+        'opening_unpaid_corporate': 0, 'opening_unpaid_pref': 0, 'opening_unpaid_city': 0,
+        'paid_corporate': 0, 'paid_pref': 0, 'paid_city': 0,
     },
     'local': {'interim_pref': 0, 'interim_city': 0},
 }
@@ -63,13 +67,38 @@ DEFAULTS = {
     'include_salaries': False,
     'notes_extra': [],
     'cash_accounts': None,     # ids of the CompanyAccounts that belong on the balance sheet (None = all)
+    'app_expenses': True,      # False: SG&A comes only from extra_sga (a closed year taken from the accountant's books)
+    'offices': [],             # this year's offices (see OFFICE_*); empty = use the company profile's offices
+    'category_accounts': {},   # expense category name -> account name used on the statements (overrides defaults)
 }
 DEFAULTS.update({k: 0 for k in INT_KEYS})
 DEFAULTS.update({k: [] for k in LIST_KEYS})
 
 
+OFFICE_TEXT = ('prefecture', 'prefecture_office', 'municipality')
+OFFICE_INT = ('employees', 'months', 'pref_months', 'pref_levy', 'city_levy')
+OFFICE_RATE = ('pref_rate', 'city_rate')
+
+
 class InputError(ValueError):
     pass
+
+
+def _normalize_offices(value):
+    """Free-form office records. A blank/missing number means "use the default"; an explicit 0 is kept."""
+    if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+        raise InputError('offices must be a list of objects')
+    out = []
+    for item in value:
+        entry = {k: str(item.get(k) or '').strip() for k in OFFICE_TEXT}
+        for key in OFFICE_INT:
+            if item.get(key) not in (None, ''):
+                entry[key] = _as_int(item[key], f'offices.{key}')
+        for key in OFFICE_RATE:
+            if item.get(key) not in (None, ''):
+                entry[key] = float(item[key])
+        out.append(entry)
+    return out
 
 
 def _as_int(value, key):
@@ -133,8 +162,14 @@ def normalize_inputs(data):
             out[key] = None if value is None else _as_int(value, key)
         elif key in LIST_KEYS:
             out[key] = _normalize_list(value, key)
-        elif key == 'include_salaries':
+        elif key in ('include_salaries', 'app_expenses'):
             out[key] = bool(value)
+        elif key == 'offices':
+            out[key] = _normalize_offices(value)
+        elif key == 'category_accounts':
+            if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+                raise InputError('category_accounts must map category names to account names')
+            out[key] = {k.strip(): v.strip() for k, v in value.items() if k.strip() and v.strip()}
         elif key == 'cash_accounts':
             if value is None:
                 out[key] = None

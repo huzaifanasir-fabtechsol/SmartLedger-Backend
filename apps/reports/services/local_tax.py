@@ -53,8 +53,14 @@ def due_date(end_date):
     return day
 
 
-def _offices(profile, capital):
-    raw = list(profile.offices) if profile and profile.offices else []
+def _num(office, key, default):
+    """Blank/missing -> default, but an explicit 0 stays 0 (e.g. no per-capita levy in a dormant year)."""
+    value = office.get(key)
+    return default if value in (None, '') else int(value)
+
+
+def _offices(profile, capital, override=None):
+    raw = list(override) if override else (list(profile.offices) if profile and profile.offices else [])
     if not raw:
         pref, city = _split_address(profile.address if profile else '')
         raw = [{'prefecture': pref, 'municipality': city, 'employees': 1}]
@@ -62,13 +68,15 @@ def _offices(profile, capital):
     offices = []
     for o in raw:
         emp = int(o.get('employees') or 0)
-        months = int(o.get('months') or 12)
+        months = _num(o, 'months', 12)
         city_table = CITY_LEVY_LARGE if total_emp > 50 else CITY_LEVY_SMALL
         offices.append({
             'prefecture': o.get('prefecture', ''), 'prefecture_office': o.get('prefecture_office', ''),
             'municipality': o.get('municipality', ''), 'employees': emp, 'months': months,
-            'pref_levy_annual': int(o.get('pref_levy') or _table(PREF_LEVY, capital)),
-            'city_levy_annual': int(o.get('city_levy') or _table(city_table, capital)),
+            # the prefectural levy is owed once per prefecture, so it can have its own month count
+            'pref_months': _num(o, 'pref_months', months),
+            'pref_levy_annual': _num(o, 'pref_levy', _table(PREF_LEVY, capital)),
+            'city_levy_annual': _num(o, 'city_levy', _table(city_table, capital)),
             'pref_rate': Decimal(str(o.get('pref_rate') or '1.0')),
             'city_rate': Decimal(str(o.get('city_rate') or '6.0')),
         })
@@ -81,7 +89,7 @@ def compute(user, fy, data, corp, profile=None):
     inputs = data['_inputs']
     l_in = inputs['tax']['local']
     capital = corp['capital']
-    offices = _offices(profile, capital)
+    offices = _offices(profile, capital, inputs['offices'])
     total_emp = sum(o['employees'] for o in offices) or 1
 
     total_business = _business_tax(corp['taxable_income'])
@@ -90,7 +98,7 @@ def compute(user, fy, data, corp, profile=None):
         o['share'] = float(share)
         o['income_base'] = _floor(int(corp['taxable_income'] * share), 1000)
         o['corp_tax_base'] = _floor(int(corp['local_base'] * share), 1000)
-        o['pref_levy'] = _floor(o['pref_levy_annual'] * o['months'] // 12, 100)
+        o['pref_levy'] = _floor(o['pref_levy_annual'] * o['pref_months'] // 12, 100)
         o['city_levy'] = _floor(o['city_levy_annual'] * o['months'] // 12, 100)
         o['pref_corp_tax'] = _floor(int(o['corp_tax_base'] * o['pref_rate'] / 100), 100)
         o['city_corp_tax'] = _floor(int(o['corp_tax_base'] * o['city_rate'] / 100), 100)
@@ -114,7 +122,7 @@ def compute(user, fy, data, corp, profile=None):
 
     due = due_date(fy.end_date)
     warnings = []
-    if not (profile and profile.offices):
+    if not (inputs['offices'] or (profile and profile.offices)):
         warnings.append(('事務所(事業所)が未登録のため、会社の住所を唯一の事務所として地方税を計算しています。',
                          'No offices are registered, so local taxes are calculated with the company address as the '
                          'only office.'))

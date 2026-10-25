@@ -6,8 +6,8 @@ matching how the statutory forms round.
 
 Scope/assumptions (also shown to the user):
 - 一括比例配分方式 is used when the taxable-sales ratio is under 95% (or sales exceed ¥500m).
-- 経過措置 (80% deduction for purchases from non-registered suppliers) is applied to the
-  ``transitional_incl_*`` inputs.
+- 経過措置 (purchases from non-registered suppliers): 80% deduction up to 2026-09-30 (``transitional_incl_*``),
+  50% from 2026-10-01 (``transitional50_incl_*``); a year that spans 2026-10-01 uses both.
 - Sales and purchase totals are derived from app data unless overridden in ``tax.consumption``.
 """
 from decimal import Decimal
@@ -75,22 +75,27 @@ def compute(user, fy, data):
     p8 = pick('purchase_incl_8', lambda: exp8)
     ret10, ret8 = c['purchase_returns_10'], c['purchase_returns_8']
     tr10, tr8 = c['transitional_incl_10'], c['transitional_incl_8']
+    tr50_10, tr50_8 = c['transitional50_incl_10'], c['transitional50_incl_8']
 
     net10, net8 = max(0, p10 - ret10), max(0, p8 - ret8)
     tax_p10 = net10 * 78 // 1100               # 7.8/110
     tax_p8 = net8 * 624 // 10800               # 6.24/108
     trans_tax_10 = tr10 * 624 // 11000         # 7.8/110 x 80%
     trans_tax_8 = tr8 * 4992 // 108000         # 6.24/108 x 80%
+    trans50_tax_10 = tr50_10 * 390 // 11000    # 7.8/110 x 50%
+    trans50_tax_8 = tr50_8 * 3120 // 108000    # 6.24/108 x 50%
 
     def apply_ratio(amount):
         return amount if full_deduction else int(amount * ratio)
 
     col = {
-        '6.24': {'purchase_incl': net8, 'tax': tax_p8, 'trans_incl': tr8, 'trans_tax': trans_tax_8},
-        '7.8': {'purchase_incl': net10, 'tax': tax_p10, 'trans_incl': tr10, 'trans_tax': trans_tax_10},
+        '6.24': {'purchase_incl': net8, 'tax': tax_p8, 'trans_incl': tr8, 'trans_tax': trans_tax_8,
+                 'trans50_incl': tr50_8, 'trans50_tax': trans50_tax_8},
+        '7.8': {'purchase_incl': net10, 'tax': tax_p10, 'trans_incl': tr10, 'trans_tax': trans_tax_10,
+                'trans50_incl': tr50_10, 'trans50_tax': trans50_tax_10},
     }
     for v in col.values():
-        v['subtotal'] = v['tax'] + v['trans_tax']
+        v['subtotal'] = v['tax'] + v['trans_tax'] + v['trans50_tax']
         v['deductible'] = apply_ratio(v['subtotal'])
     deductible = col['6.24']['deductible'] + col['7.8']['deductible']
     if not full_deduction:
@@ -149,6 +154,11 @@ def compute(user, fy, data):
         {'code': '52', 'kind': 'transitional', 'rate': '10.0% x 80%', 'amount': tr10},
         {'code': '52', 'kind': 'transitional', 'rate': '8.0% (reduced) x 80%', 'amount': tr8},
     ]
+    if tr50_10 or tr50_8:
+        transactions += [
+            {'code': '52', 'kind': 'transitional50', 'rate': '10.0% x 50%', 'amount': tr50_10},
+            {'code': '52', 'kind': 'transitional50', 'rate': '8.0% (reduced) x 50%', 'amount': tr50_8},
+        ]
 
     refund_total = -L[26] if L[26] < 0 else 0
     return {
@@ -161,7 +171,8 @@ def compute(user, fy, data):
         'ratio': ratio, 'ratio_pct_floor': ratio_pct_floor, 'ratio_pct_full': ratio * 100,
         'full_deduction': full_deduction, 'over_500m': taxable_excl > 500_000_000,
         'purchases': {'incl_10': p10, 'incl_8': p8, 'returns_10': ret10, 'returns_8': ret8,
-                      'transitional_10': tr10, 'transitional_8': tr8, 'cols': col,
+                      'transitional_10': tr10, 'transitional_8': tr8,
+                      'transitional50_10': tr50_10, 'transitional50_8': tr50_8, 'cols': col,
                       'deductible': deductible},
         'lines': L, 'rate_rows': rate_rows, 'transactions': transactions,
         'refund_total': refund_total, 'payable_total': max(0, L[26]),

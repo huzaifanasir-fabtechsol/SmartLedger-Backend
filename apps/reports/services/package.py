@@ -5,7 +5,7 @@ from . import consumption_tax, corporate_tax, local_tax, readiness, schedules
 from apps.revenue.models import CompanyAccount, OrderItem, Transaction
 
 from .inputs import normalize_inputs
-from .statements import compute_statements
+from .statements import compute_statements, expense_categories
 
 
 def _profile(user):
@@ -109,6 +109,7 @@ def auto_values(user, fy):
     second = compute_package(user, fy, cleared)
 
     pl, ct, corp = first['pl'], second['consumption'], second['corporate']
+    tax_c = raw['tax']['corporate']
     cash = next((i['amount'] for i in first['bs']['current_assets'] if i['label'] == '現金及び預金'), 0)
     comp, s = ct['components'], ct['sales']
     unpaid = corp['form5_1']['unpaid']
@@ -125,6 +126,7 @@ def auto_values(user, fy):
     return {
         'sales': pl['sales'], 'purchases': pl['purchases'], 'cash': cash, 'accounts': accounts,
         'unsold_cars': unsold_cars(user, fy),
+        'categories': expense_categories(user, fy, raw['category_accounts']) if raw['app_expenses'] else [],
         'consumption': {
             'sales_incl_10': s['incl_10'], 'sales_incl_8': s['incl_8'], 'nontaxable_sales': s['nontaxable'],
             'purchase_incl_10': ct['purchases']['incl_10'], 'purchase_incl_8': ct['purchases']['incl_8'],
@@ -146,10 +148,16 @@ def auto_values(user, fy):
                 ['Fixed assets acquired this year x 1.10', comp['assets_10']]],
             'consumption.purchase_incl_8': [['Expenses carrying 8% tax', comp['expenses_8']]],
             'corporate.entertainment_expenses': ent_lines,
-            'corporate.unpaid_corporate': [['Corporate tax payable', corp['corp_payable']],
-                                           ['Local corporate tax payable', corp['local_payable']]],
-            'corporate.unpaid_pref': [['Prefectural inhabitant tax payable', second['local']['pref_total_payable']]],
-            'corporate.unpaid_city': [['Municipal inhabitant tax payable', second['local']['city_total_payable']]],
+            'corporate.unpaid_corporate': [['Unpaid at start of year', tax_c['opening_unpaid_corporate']],
+                                           ['Corporate tax payable', corp['corp_payable']],
+                                           ['Local corporate tax payable', corp['local_payable']],
+                                           ['Paid this year', -tax_c['paid_corporate']]],
+            'corporate.unpaid_pref': [['Unpaid at start of year', tax_c['opening_unpaid_pref']],
+                                      ['Accrued this year', second['local']['pref_total_payable']],
+                                      ['Paid this year', -tax_c['paid_pref']]],
+            'corporate.unpaid_city': [['Unpaid at start of year', tax_c['opening_unpaid_city']],
+                                      ['Accrued this year', second['local']['city_total_payable']],
+                                      ['Paid this year', -tax_c['paid_city']]],
         },
     }
 
@@ -180,6 +188,7 @@ def roll_forward(user, fy):
     inputs, bs, corp = data['_inputs'], data['bs'], data['corporate']
     start, end = _next_period(fy)
 
+    unpaid = corp['form5_1']['unpaid']
     losses = [{'label': r['label'], 'amount': r['carry']} for r in corp['form7']['rows'] if r['carry']]
     if corp['form7']['current_loss']:
         losses.append({'label': f"{fy.start_date:%Y-%m-%d} to {fy.end_date:%Y-%m-%d}",
@@ -192,10 +201,14 @@ def roll_forward(user, fy):
         'investments': inputs['investments'],
         'current_liabilities': inputs['current_liabilities'],
         'fixed_liabilities': inputs['fixed_liabilities'],
-        'rent_details': inputs['rent_details'],
+        # who the landlords are carries over; the amounts and periods are this year's to enter
+        'rent_details': [{**r, 'amount': 0, 'note': ''} for r in inputs['rent_details']],
         'include_salaries': inputs['include_salaries'],
         'tax': {'corporate': {'prior_losses': losses,
-                              'opening_provision': corp['form5_2']['provision'][41]}},
+                              'opening_provision': corp['form5_2']['provision'][41],
+                              'opening_unpaid_corporate': unpaid['corporate'],
+                              'opening_unpaid_pref': unpaid['pref'],
+                              'opening_unpaid_city': unpaid['city']}},
     })
     with transaction.atomic():
         new_fy = FiscalYear.objects.create(user=user, term_no=fy.term_no + 1, start_date=start, end_date=end)

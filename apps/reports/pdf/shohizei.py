@@ -13,6 +13,7 @@ KIND_LABELS = {
     'purchase_reduced': ('課税仕入れ (軽減税率)', 'Taxable purchases - reduced rate'),
     'purchase_returns': ('課税仕入れの返還等', 'Returns / allowances on purchases'),
     'transitional': ('経過措置 80%控除対象 課税仕入れ', 'Purchases from non-registered suppliers (80% deduction)'),
+    'transitional50': ('経過措置 50%控除対象 課税仕入れ', 'Purchases from non-registered suppliers (50% deduction)'),
 }
 
 
@@ -147,6 +148,11 @@ def draw_appendix_10(w, c):
           col8['trans_incl'], col10['trans_incl'], col8['trans_incl'] + col10['trans_incl']),
         R(12, ('経過措置適用の課税仕入れに係る消費税額 (80%)', 'Tax on transitional purchases (80%)'),
           col8['trans_tax'], col10['trans_tax'], col8['trans_tax'] + col10['trans_tax']),
+        *([R('11-2', ('経過措置適用の課税仕入れの支払対価の額 (税込み・50%)', 'Purchases under 50% transitional rule (tax incl.)'),
+             col8['trans50_incl'], col10['trans50_incl'], col8['trans50_incl'] + col10['trans50_incl']),
+           R('12-2', ('経過措置適用の課税仕入れに係る消費税額 (50%)', 'Tax on transitional purchases (50%)'),
+             col8['trans50_tax'], col10['trans50_tax'], col8['trans50_tax'] + col10['trans50_tax'])]
+          if p['transitional50_10'] or p['transitional50_8'] else []),
         T(17, ('課税仕入れ等の税額の合計額', 'Total input tax'),
           col8['subtotal'], col10['subtotal'], col8['subtotal'] + col10['subtotal'], keep=True),
         R(18, ('課税売上高が5億円以下かつ課税売上割合が95%以上の場合 (17の金額)', 'Where sales ≤ ¥500m and ratio ≥ 95% (amount of 17)'),

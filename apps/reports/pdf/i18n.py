@@ -23,7 +23,7 @@ ACCOUNT_EN = {
     '車両費': 'Vehicle expenses', '燃料費': 'Fuel expenses', '地代家賃': 'Rent', '保険料': 'Insurance',
     '租税公課': 'Taxes and dues', '支払報酬料': 'Professional fees', '減価償却費': 'Depreciation',
     '繰延資産償却': 'Amortization of deferred assets', '給料手当': 'Salaries and allowances',
-    '雑費': 'Miscellaneous expenses', '受取利息': 'Interest income', '雑収入': 'Miscellaneous income',
+    '雑費': 'Miscellaneous expenses', '水道光熱費': 'Utilities', '福利厚生費': 'Employee welfare', '受取利息': 'Interest income', '雑収入': 'Miscellaneous income',
     '雑損失': 'Miscellaneous losses', '支払利息': 'Interest expenses',
     '法人税・住民税及び事業税': 'Corporate, inhabitant and enterprise taxes', '過年度法人税等': 'Prior-year corporate taxes',
 }

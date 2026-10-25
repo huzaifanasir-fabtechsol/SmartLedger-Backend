@@ -433,7 +433,8 @@ class ReadinessTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         keys = [i['key'] for i in resp.data['readiness']]
         self.assertEqual(keys[:3], ['company', 'period', 'opening'])
-        self.assertEqual(len(keys), 13)
+        self.assertEqual(len(keys), 14)
+        self.assertIn('carried', keys)           # a term after the first carries last year's balances
 
 
 class UnsoldCarsTests(TestCase):

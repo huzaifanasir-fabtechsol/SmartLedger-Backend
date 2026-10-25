@@ -56,14 +56,52 @@ def _bank_cash(user, end_date, account_ids=None):
     return total
 
 
-def _sga_from_expenses(user, fy):
-    totals = OrderedDict()
-    expenses = (Expense.objects
-                .filter(user=user, date__range=(fy.start_date, fy.end_date))
+# How the app's expense categories are named on the statements. A category the user has typed in Japanese keeps
+# its own name; any other unknown name falls under 雑費. Every choice can be overridden per year
+# (``category_accounts``) and should be reviewed with the tax accountant.
+ACCOUNT_DEFAULTS = {
+    'FOOD': '会議費', 'FAMILY MART': '会議費', 'BURGER KING': '会議費', 'GIFT': '接待交際費',
+    'PARKING': '車両費', 'SPARE PARTS': '車両費', 'VEHICLE EXPENSE': '車両費', 'GAS 燃料費': '燃料費',
+    'RENT 家賃': '地代家賃', 'OFFICE SUPPLIES 事務用品費': '事務用消耗品費', 'EQUIPMENT': '消耗品費',
+    'SHOPING': '消耗品費', 'OFFICIAL DOCUMENTS 租税公課': '租税公課', 'PHONE INTERNET 通信費': '通信費',
+    'BILL WATER GAS ELECTRICITY 光熱費': '水道光熱費', 'HOTEL': '旅費交通費', 'TRAVEL': '旅費交通費',
+    'ETC 旅費交通費': '旅費交通費', 'SALARY': '給料手当', 'MEDICIEN': '福利厚生費',
+}
+
+
+def _has_cjk(text):
+    return any('\u3040' <= ch <= '\u9fff' for ch in text)
+
+
+def account_for(category_name, overrides=None):
+    """Account name a category is reported under: user override, built-in default, own Japanese name, else 雑費."""
+    name = (category_name or '').strip()
+    if not name:
+        return '雑費'
+    if overrides and overrides.get(name):
+        return overrides[name]
+    if name in ACCOUNT_DEFAULTS:
+        return ACCOUNT_DEFAULTS[name]
+    return name if _has_cjk(name) else '雑費'
+
+
+def expense_categories(user, fy, overrides=None):
+    """[{name, account, amount, count}] for every expense category used in the period."""
+    rows = OrderedDict()
+    expenses = (Expense.objects.filter(user=user, date__range=(fy.start_date, fy.end_date))
                 .select_related('category').order_by('category_id', 'id'))
     for exp in expenses:
-        label = exp.category.name if exp.category_id else '雑費'
-        totals[label] = totals.get(label, 0) + _yen(exp.amount)
+        name = exp.category.name if exp.category_id else ''
+        row = rows.setdefault(name, {'name': name, 'account': account_for(name, overrides), 'amount': 0, 'count': 0})
+        row['amount'] += _yen(exp.amount)
+        row['count'] += 1
+    return list(rows.values())
+
+
+def _sga_from_expenses(user, fy, overrides=None):
+    totals = OrderedDict()
+    for row in expense_categories(user, fy, overrides):
+        totals[row['account']] = totals.get(row['account'], 0) + row['amount']
     return [{'label': k, 'amount': v} for k, v in totals.items()]
 
 
@@ -109,8 +147,8 @@ def compute_statements(user, fy, raw_inputs=None):
     cost_of_sales = inputs['opening_inventory'] + net_purchases - inputs['closing_inventory']
     gross_profit = sales - cost_of_sales
 
-    sga = _sga_from_expenses(user, fy)
-    sources['sga'] = 'derived'
+    sga = _sga_from_expenses(user, fy, inputs['category_accounts']) if inputs['app_expenses'] else []
+    sources['sga'] = 'derived' if inputs['app_expenses'] else 'input'
     if inputs['include_salaries']:
         salaries = _salaries(user, fy)
         if salaries:
