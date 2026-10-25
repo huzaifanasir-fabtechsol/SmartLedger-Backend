@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
@@ -74,3 +76,27 @@ class Letterhead(BaseModel):
 
     def __str__(self):
         return self.name
+
+
+def _letterhead_record_path(instance, filename):
+    # Random name: the stored file is only served through the authenticated download endpoint
+    return f'letterhead_records/{instance.user_id}/{uuid.uuid4().hex}'
+
+
+class LetterheadRecord(BaseModel):
+    """A finished document (e.g. a filled-in exported letterhead) uploaded for the record."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='letterhead_records')
+    description = models.TextField()
+    file = models.FileField(upload_to=_letterhead_record_path, max_length=255)
+    original_name = models.CharField(max_length=255)
+    size = models.PositiveBigIntegerField()  # original bytes
+    stored_size = models.PositiveBigIntegerField()  # bytes on disk
+    is_compressed = models.BooleanField(default=False)  # stored gzip-wrapped; unwrapped on download
+    sha256 = models.CharField(max_length=64)  # of the original bytes
+
+    class Meta:
+        db_table = 'letterhead_records'
+        ordering = ['-created_at', '-id']
+
+    def __str__(self):
+        return self.original_name

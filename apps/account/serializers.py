@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 import re
-from apps.account.models import User, TaxRate, Letterhead
+from apps.account.models import User, TaxRate, Letterhead, LetterheadRecord
 from django.contrib.auth.password_validation import validate_password
 
 class TaxRateSerializer(serializers.ModelSerializer):
@@ -121,3 +121,34 @@ class UserProfileSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+class LetterheadRecordSerializer(serializers.ModelSerializer):
+    ALLOWED_EXTENSIONS = ('.docx', '.doc', '.pdf', '.odt', '.rtf', '.png', '.jpg', '.jpeg')
+    MAX_SIZE = 20 * 1024 * 1024
+
+    file = serializers.FileField(write_only=True)
+
+    class Meta:
+        model = LetterheadRecord
+        fields = ['id', 'description', 'file', 'original_name', 'size', 'stored_size', 'is_compressed',
+                  'sha256', 'created_at']
+        read_only_fields = ['original_name', 'size', 'stored_size', 'is_compressed', 'sha256', 'created_at']
+
+    def validate_description(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('Please add a description.')
+        return value
+
+    def validate_file(self, value):
+        name = (value.name or '').lower()
+        if not name.endswith(self.ALLOWED_EXTENSIONS):
+            raise serializers.ValidationError(
+                'Unsupported file type. Allowed: ' + ', '.join(self.ALLOWED_EXTENSIONS) + '.'
+            )
+        if value.size > self.MAX_SIZE:
+            raise serializers.ValidationError('File is too large (maximum 20 MB).')
+        if value.size == 0:
+            raise serializers.ValidationError('The file is empty.')
+        return value
