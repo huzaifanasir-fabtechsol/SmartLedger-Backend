@@ -128,8 +128,11 @@ class CompanyAccountSerializer(serializers.ModelSerializer):
 class AuctionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Auction
-        fields = ['id', 'name', 'description', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'auction_type', 'description', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
+
+    def validate_auction_type(self, value):
+        return (value or '').strip()
 
 class TransactionSerializer(serializers.ModelSerializer):
     company_account_name = serializers.CharField(source='company_account.bank_name', read_only=True)

@@ -619,3 +619,56 @@ class MixedTaxReportTests(TestCase):
         mixed = next(r for r in rows if r[2] == 'mixed')
         self.assertEqual(mixed[5], 'Tax Mixed')
         self.assertEqual(mixed[10:15], [10000.0, 800.0, 700.0, 1500.0, 11500.0])
+
+
+@override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
+class DuplicateExpenseTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='dup', email='dup@x.com', password='pw')
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.cat = ExpenseCategory.objects.create(user=self.user, name='General')
+
+    def make(self, title='Fuel', amount='1100.00', taxes=None, **extra):
+        data = {'title': title, 'amount': amount, 'date': '2026-10-15', 'category': self.cat.id,
+                'taxes': taxes if taxes is not None else [{'rate': 10, 'category': 'inclusive'}], **extra}
+        s = ExpenseSerializer(data=data)
+        self.assertTrue(s.is_valid(), s.errors)
+        return s.save(user=self.user)
+
+    def test_stats_and_list_count_only_fully_identical_rows(self):
+        a, b, c = self.make(), self.make(), self.make()
+        self.make(description='different')
+        self.make(taxes=[{'rate': 8, 'category': 'inclusive'}])
+        Expense.objects.filter(pk=b.pk).update(is_highlighted=True)  # UI flag is not data
+        other = User.objects.create_user(username='o', email='o@x.com', password='pw')
+        Expense.objects.create(user=other, title='Fuel', amount=a.amount, date=a.date)
+
+        stats = self.client.get('/api/expenses/stats/').json()
+        self.assertEqual(stats['duplicate_count'], 2)
+        self.assertEqual(stats['duplicate_group_count'], 1)
+        d = self.client.get('/api/expenses/duplicates/').json()
+        self.assertEqual(d['group_count'], 1)
+        self.assertEqual([e['id'] for e in d['groups'][0]['expenses']], [a.id, b.id, c.id])
+
+    def test_filters_apply_to_duplicates(self):
+        self.make(), self.make()
+        self.assertEqual(self.client.get('/api/expenses/stats/?month=9').json()['duplicate_count'], 0)
+        self.assertEqual(self.client.get('/api/expenses/stats/?month=10').json()['duplicate_count'], 1)
+
+    def test_delete_duplicate_refuses_last_copy(self):
+        a, b = self.make(), self.make()
+        res = self.client.delete(f'/api/expenses/{a.id}/delete_duplicate/')
+        self.assertEqual(res.status_code, 204)
+        res = self.client.delete(f'/api/expenses/{b.id}/delete_duplicate/')
+        self.assertEqual(res.status_code, 409)
+        self.assertTrue(Expense.objects.filter(pk=b.pk).exists())
+        self.assertEqual(self.client.get('/api/expenses/duplicates/').json()['groups'], [])
+
+    def test_delete_duplicate_rejects_unique_and_foreign_expenses(self):
+        solo = self.make(title='Solo')
+        self.assertEqual(self.client.delete(f'/api/expenses/{solo.id}/delete_duplicate/').status_code, 409)
+        other = User.objects.create_user(username='o2', email='o2@x.com', password='pw')
+        theirs = Expense.objects.create(user=other, title='T', amount=1, date=solo.date)
+        Expense.objects.create(user=other, title='T', amount=1, date=solo.date)
+        self.assertEqual(self.client.delete(f'/api/expenses/{theirs.id}/delete_duplicate/').status_code, 404)

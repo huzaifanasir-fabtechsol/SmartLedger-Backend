@@ -1835,15 +1835,28 @@ class AuctionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = Auction.objects.filter(user=self.request.user)
         search = self.request.query_params.get('search')
+        auction_type = self.request.query_params.get('auction_type')
         if search:
             queryset = queryset.filter(
                 Q(name__icontains=search) |
+                Q(auction_type__icontains=search) |
                 Q(description__icontains=search)
             )
+        if auction_type:
+            queryset = queryset.filter(auction_type__iexact=auction_type.strip())
         return queryset
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def types(self, request):
+        """Distinct auction types in use, for the filter dropdown and form suggestions."""
+        types = (
+            Auction.objects.filter(user=request.user).exclude(auction_type='')
+            .values_list('auction_type', flat=True).distinct()
+        )
+        return Response(sorted(set(types), key=str.lower))
 
     @action(detail=False, methods=['get'])
     def stats(self, request):

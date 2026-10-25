@@ -40,8 +40,9 @@ class CompanyAccountAdmin(admin.ModelAdmin):
 
 @admin.register(Auction)
 class AuctionAdmin(admin.ModelAdmin):
-    list_display = ['name', 'user', 'created_at']
-    search_fields = ['name', 'description']
+    list_display = ['name', 'auction_type', 'user', 'created_at']
+    search_fields = ['name', 'auction_type', 'description']
+    list_filter = ['auction_type']
 
 @admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):

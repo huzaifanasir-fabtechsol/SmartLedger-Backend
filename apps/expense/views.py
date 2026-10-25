@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -66,6 +67,29 @@ def _safe_parse_date(value):
         except (ValueError, TypeError):
             continue
     return None
+
+# Every stored expense field except id, owner, timestamps and the UI-only highlight flag.
+# Two expenses are duplicates when all of these match.
+DUPLICATE_FIELDS = (
+    'title', 'amount', 'description', 'date', 'category_id', 'transaction_id', 'restaurant_id',
+    'spare_part_id', 'is_cash', 'tax_category', 'tax_percent_used', 'tax_amount', 'number_of_taxes',
+    'number_of_exclusive', 'number_of_inclusive_tax', 'exclusive_tax_amount', 'inclusive_tax_amount',
+)
+
+
+def _duplicate_key(values):
+    """values = (*DUPLICATE_FIELDS, taxes); taxes is JSON so it is compared in canonical form."""
+    *plain, taxes = values
+    return (*plain, json.dumps(taxes or [], sort_keys=True, default=str))
+
+
+def _duplicate_groups(queryset):
+    """Lists of expense ids (oldest first) that share identical data; only groups of 2+."""
+    groups = {}
+    for row in queryset.order_by('id').values_list('id', *DUPLICATE_FIELDS, 'taxes'):
+        groups.setdefault(_duplicate_key(row[1:]), []).append(row[0])
+    return [ids for ids in groups.values() if len(ids) > 1]
+
 
 class ExpenseViewSet(viewsets.ModelViewSet):
     serializer_class = ExpenseSerializer
@@ -704,6 +728,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         total_tax = queryset.aggregate(total=Sum('tax_amount'))['total'] or 0
         cash_total = queryset.filter(is_cash=True).aggregate(total=Sum('amount'))['total'] or 0
         bank_total = queryset.filter(is_cash=False).aggregate(total=Sum('amount'))['total'] or 0
+        duplicate_groups = _duplicate_groups(queryset)
         return Response({
             'total_expenses': total_expenses,
             'total_amount': float(total_amount),
@@ -711,7 +736,58 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             'grand_total': float(total_amount + total_tax),
             'cash_total': float(cash_total),
             'bank_total': float(bank_total),
+            # Extra copies: deleting this many expenses would leave one of each
+            'duplicate_count': sum(len(ids) - 1 for ids in duplicate_groups),
+            'duplicate_group_count': len(duplicate_groups),
         })
+
+    @action(detail=False, methods=['get'])
+    def duplicates(self, request):
+        queryset = self.get_queryset()
+        groups = _duplicate_groups(queryset)
+        by_id = {
+            exp.id: exp
+            for exp in Expense.objects.filter(id__in=[i for ids in groups for i in ids])
+            .select_related('category', 'restaurant', 'spare_part')
+        }
+        payload = [
+            {'count': len(ids), 'expenses': ExpenseSerializer([by_id[i] for i in ids], many=True).data}
+            for ids in groups
+        ]
+        payload.sort(key=lambda g: (g['expenses'][0]['date'], g['expenses'][0]['id']), reverse=True)
+        return Response({
+            'duplicate_count': sum(g['count'] - 1 for g in payload),
+            'group_count': len(payload),
+            'groups': payload,
+        })
+
+    @action(detail=True, methods=['delete'])
+    def delete_duplicate(self, request, pk=None):
+        """Delete one copy of a duplicated expense, refusing if it is the last remaining copy."""
+        expense = Expense.objects.filter(user=request.user, pk=pk).first()
+        if expense is None:
+            return Response({'detail': 'Expense not found.'}, status=status.HTTP_404_NOT_FOUND)
+        values = [getattr(expense, f) for f in DUPLICATE_FIELDS]
+        key = _duplicate_key((*values, expense.taxes))
+        with db_transaction.atomic():
+            # Lock the whole identical set in id order, so two concurrent deletes
+            # can neither remove both copies nor deadlock each other
+            identical = [
+                e for e in Expense.objects.select_for_update()
+                .filter(user=request.user, **dict(zip(DUPLICATE_FIELDS, values)))
+                .order_by('id')
+                if _duplicate_key((*[getattr(e, f) for f in DUPLICATE_FIELDS], e.taxes)) == key
+            ]
+            target = next((e for e in identical if e.pk == expense.pk), None)
+            if target is None:
+                return Response({'detail': 'Expense not found.'}, status=status.HTTP_404_NOT_FOUND)
+            if len(identical) < 2:
+                return Response(
+                    {'detail': 'This expense no longer has a duplicate, so it was not deleted.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            target.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['get'])
     def tax_stats(self, request):

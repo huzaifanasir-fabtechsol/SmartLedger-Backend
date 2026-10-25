@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from apps.account.models import User
 from apps.expense.models import Expense, ExpenseCategory
-from apps.revenue.models import Car, CarCategory, Order, OrderItem
+from apps.revenue.models import Auction, Car, CarCategory, Order, OrderItem
 
 URL = '/api/revenue/orders/dashboard/'
 
@@ -129,3 +129,27 @@ class DashboardTests(TestCase):
                     'invoice_total', 'net_profit', 'total_purchase'):
             self.assertEqual(data[key], 0, key)
         self.assertEqual(data['latest_expenses'], [])
+
+
+class AuctionTypeTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='au', email='au@example.com', password='x')
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_crud_filter_and_types(self):
+        res = self.client.post('/api/revenue/auctions/', {'name': 'USS Tokyo', 'auction_type': '  USS '}, format='json')
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()['auction_type'], 'USS')
+        taa = self.client.post('/api/revenue/auctions/', {'name': 'TAA Kansai', 'auction_type': 'TAA'}, format='json').json()
+        self.client.post('/api/revenue/auctions/', {'name': 'Untyped'}, format='json')
+        other = User.objects.create_user(username='o', email='o@example.com', password='x')
+        Auction.objects.create(user=other, name='Theirs', auction_type='Secret')
+
+        res = self.client.patch(f"/api/revenue/auctions/{taa['id']}/", {'auction_type': 'Online'}, format='json')
+        self.assertEqual(res.json()['auction_type'], 'Online')
+
+        names = [a['name'] for a in self.client.get('/api/revenue/auctions/?auction_type=uss').json()['results']]
+        self.assertEqual(names, ['USS Tokyo'])
+        self.assertEqual(self.client.get('/api/revenue/auctions/?search=online').json()['count'], 1)
+        self.assertEqual(self.client.get('/api/revenue/auctions/types/').json(), ['Online', 'USS'])

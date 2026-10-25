@@ -240,6 +240,7 @@ class CompanyAccount(BaseModel):
 
 class Auction(BaseModel):
     name = models.CharField(max_length=200)
+    auction_type = models.CharField(max_length=100, blank=True, default='')
     description = models.TextField(blank=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='auctions')
 
