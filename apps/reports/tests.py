@@ -1,16 +1,19 @@
 import datetime
+import io
 
 from django.test import TestCase
+from openpyxl import load_workbook
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.account.models import User
 from apps.expense.models import Expense, ExpenseCategory
 from apps.reports.models import FiscalYear, FixedAsset, StatementInput
-from apps.reports.pdf.package import build_package
+from apps.reports.pdf.package import PARTS, build_package
 from apps.reports.services.depreciation import (declining_200_rate, depreciate, months_in_year,
                                                 straight_line_rate)
 from apps.reports.services.inputs import InputError, normalize_inputs
+from apps.reports.services.package import compute_package
 from apps.reports.services.statements import compute_statements
 from apps.revenue.models import CompanyAccount, Order, Transaction
 
@@ -204,6 +207,24 @@ class PdfTests(TestCase):
         self.assertEqual(pdf.count(b'/Type /Page\n') + pdf.count(b'/Type /Page '), 6)
 
 
+class XlsxTests(TestCase):
+    def test_every_part_renders_with_amounts_as_numbers(self):
+        user = User.objects.create_user(username='u', email='u@example.com', password='x', company_name='会社')
+        data = compute_package(user, make_sample_year(user))
+        for lang in ('ja', 'en'):
+            for mode in ('full', 'simple'):
+                wb = load_workbook(build_package(data, list(PARTS), lang, mode, output='xlsx'))
+                self.assertGreater(len(wb.sheetnames), 1)
+        wb = load_workbook(build_package(data, ['kessan'], 'en', output='xlsx'))
+        self.assertEqual(wb.sheetnames, ['Contents', '01 Balance Sheet', '02 Income Statement',
+                                         '03 Schedule of SG&A Expenses', '04 Statement of Changes in Memb',
+                                         '05 Notes to the Financial State'])
+        bs = wb['01 Balance Sheet']
+        total_row = [r for r in bs.iter_rows(values_only=True) if r[0] == 'Total assets'][0]
+        self.assertEqual(total_row[1], data['bs']['assets_total'])
+        self.assertEqual(total_row[3], data['bs']['liabilities_and_equity_total'])
+
+
 class ApiTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='u', email='u@example.com', password='x', company_name='会社')
@@ -244,6 +265,15 @@ class ApiTests(TestCase):
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
         self.assertTrue(pdf.content.startswith(b'%PDF'))
         unknown = self.client.get(f'/api/reports/fiscal-years/{fy_id}/pdf/?parts=nope')
+        self.assertEqual(unknown.status_code, status.HTTP_400_BAD_REQUEST)
+
+        xlsx = self.client.get(f'/api/reports/fiscal-years/{fy_id}/xlsx/?parts=kessan,hojinzei&lang=en&mode=simple')
+        self.assertEqual(xlsx.status_code, status.HTTP_200_OK)
+        self.assertIn('spreadsheetml', xlsx['Content-Type'])
+        self.assertIn('.xlsx', xlsx['Content-Disposition'])
+        wb = load_workbook(io.BytesIO(xlsx.content))
+        self.assertEqual(wb.sheetnames[0], 'Contents')
+        unknown = self.client.get(f'/api/reports/fiscal-years/{fy_id}/xlsx/?parts=nope')
         self.assertEqual(unknown.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_invalid_period_rejected(self):

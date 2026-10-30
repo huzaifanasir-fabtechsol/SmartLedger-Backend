@@ -13,6 +13,11 @@ from .serializers import (CompanyProfileSerializer, FiscalYearSerializer, FixedA
 from .services.inputs import normalize_inputs
 from .services.package import auto_values, compute_package, public_view, roll_forward
 
+CONTENT_TYPES = {
+    'pdf': 'application/pdf',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+}
+
 
 def _get_profile(user):
     """Profile for the user, pre-filled from the account's company fields on first access."""
@@ -78,9 +83,7 @@ class FiscalYearViewSet(viewsets.ModelViewSet):
         """The calculated value of every overridable field, ignoring any override the user has set."""
         return Response(auto_values(request.user, self.get_object()))
 
-    @action(detail=True, methods=['get'])
-    def pdf(self, request, pk=None):
-        """PDF package. Query: parts (comma list), lang (ja|en), mode (full|simple)."""
+    def _package_file(self, request, output):
         fiscal_year = self.get_object()
         parts = [p for p in request.query_params.get('parts', 'kessan').split(',') if p]
         lang = request.query_params.get('lang', 'ja')
@@ -91,15 +94,25 @@ class FiscalYearViewSet(viewsets.ModelViewSet):
             return Response({'detail': f'lang must be one of {LANGS} and mode one of {MODES}.'},
                             status=status.HTTP_400_BAD_REQUEST)
         try:
-            buffer = build_package(compute_package(request.user, fiscal_year), parts, lang, mode)
+            buffer = build_package(compute_package(request.user, fiscal_year), parts, lang, mode, output)
         except UnknownPart as exc:
             return Response({'detail': f'Unknown parts: {exc}. Available: {", ".join(PARTS)}'},
                             status=status.HTTP_400_BAD_REQUEST)
-        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
-        filename = f'financial_statements_term{fiscal_year.term_no}_{lang}_{mode}.pdf'
+        response = HttpResponse(buffer.getvalue(), content_type=CONTENT_TYPES[output])
+        filename = f'financial_statements_term{fiscal_year.term_no}_{lang}_{mode}.{output}'
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         response['X-Content-Type-Options'] = 'nosniff'
         return response
+
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        """PDF package. Query: parts (comma list), lang (ja|en), mode (full|simple)."""
+        return self._package_file(request, 'pdf')
+
+    @action(detail=True, methods=['get'])
+    def xlsx(self, request, pk=None):
+        """Same package as an Excel workbook (one sheet per form). Same query as ``pdf``."""
+        return self._package_file(request, 'xlsx')
 
 
 class FixedAssetViewSet(viewsets.ModelViewSet):
