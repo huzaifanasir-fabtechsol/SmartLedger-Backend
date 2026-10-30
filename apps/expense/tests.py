@@ -672,3 +672,44 @@ class DuplicateExpenseTests(TestCase):
         theirs = Expense.objects.create(user=other, title='T', amount=1, date=solo.date)
         Expense.objects.create(user=other, title='T', amount=1, date=solo.date)
         self.assertEqual(self.client.delete(f'/api/expenses/{theirs.id}/delete_duplicate/').status_code, 404)
+
+
+@override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
+class AvailableTransactionsTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='tx', email='tx@x.com', password='pw')
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.bank_a = CompanyAccount.objects.create(
+            user=self.user, bank_name='A', account_number='1', branch_code='1', account_holder='Owner'
+        )
+        self.bank_b = CompanyAccount.objects.create(
+            user=self.user, bank_name='B', account_number='2', branch_code='2', account_holder='Owner'
+        )
+
+    def tx(self, account, day, withdraw=0, deposit=0):
+        return Transaction.objects.create(
+            user=self.user, company_account=account, date=day, withdraw=withdraw, deposit=deposit,
+            balance=0, description='x'
+        )
+
+    def ids(self, query):
+        response = self.client.get(f'/api/expenses/available_transactions/?{query}')
+        self.assertEqual(response.status_code, 200)
+        return {row['id'] for row in response.json()}
+
+    def test_date_without_account_searches_every_account(self):
+        a = self.tx(self.bank_a, '2026-10-15', withdraw=1000)
+        b = self.tx(self.bank_b, '2026-10-15', deposit=5000)
+        self.tx(self.bank_a, '2026-10-16', withdraw=1000)
+        self.assertEqual(self.ids('date=2026-10-15'), {a.id, b.id})
+        self.assertEqual(self.ids(f'date=2026-10-15&account_id={self.bank_b.id}'), {b.id})
+
+    def test_amount_matches_withdraw_or_deposit_exactly(self):
+        out = self.tx(self.bank_a, '2026-10-15', withdraw=1100)
+        into = self.tx(self.bank_b, '2026-10-15', deposit=1000)
+        self.tx(self.bank_a, '2026-10-15', withdraw=11000)
+        self.assertEqual(self.ids('date=2026-10-15&amount=1100'), {out.id})
+        self.assertEqual(self.ids('date=2026-10-15&amount=1000&amount=1100.00'), {out.id, into.id})
+        # Unparseable amounts are ignored rather than emptying the result
+        self.assertEqual(len(self.ids('date=2026-10-15&amount=abc')), 3)

@@ -1153,6 +1153,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             else:
                 queryset = queryset.none()
 
+        # Repeatable: ?amount=1000&amount=1100 matches a deposit or withdraw of either value
+        amounts = []
+        for raw_amount in request.query_params.getlist('amount'):
+            try:
+                amounts.append(Decimal(raw_amount).quantize(Decimal('0.01')))
+            except (InvalidOperation, ValueError):
+                continue
+        if amounts:
+            queryset = queryset.filter(Q(deposit__in=amounts) | Q(withdraw__in=amounts))
+
         serializer = TransactionSerializer(queryset.order_by('-date', '-id'), many=True)
         return Response(serializer.data)
 
