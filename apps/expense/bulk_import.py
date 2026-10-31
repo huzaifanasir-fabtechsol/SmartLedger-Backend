@@ -44,6 +44,7 @@ COLUMNS = [
     ('transaction_id', 'Transaction ID', {'transaction id', 'transection id', 'transactionid', 'transectionid', 'txn id'}),
     ('withdraw', 'Withdraw Amount', {'withdraw amount', 'withdraw', 'withdrawal amount', 'withdrawal'}),
     ('deposit', 'Deposit Amount', {'deposit amount', 'deposit', 'deposite amount', 'deposite', 'depostie amount'}),
+    ('balance', 'Balance', {'balance', 'balance amount'}),
     ('description', 'Description', {'description'}),
     ('notes', 'Notes', {'notes', 'note'}),
     ('title', 'Title', {'title'}),
@@ -231,6 +232,17 @@ def _parse_amount(value):
     return _parse_decimal(value)
 
 
+def _parse_balance(value):
+    """Like _parse_decimal, but a balance may be negative (overdrawn account)."""
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) and value < 0:
+        number = _parse_decimal(-value)
+    elif isinstance(value, str) and value.strip().startswith('-'):
+        number = _parse_decimal(value.strip()[1:])
+    else:
+        return _parse_decimal(value)
+    return -number if number is not None else None
+
+
 def _category_key(name):
     return ' '.join(name.split()).casefold()
 
@@ -279,6 +291,14 @@ def _validate_row(record):
         elif max(withdraw, deposit) > MAX_TRANSACTION_AMOUNT:
             errors.append('Amount is too large')
 
+    balance = _parse_balance(record.get('balance'))
+    if _text(record.get('balance')) == '':
+        errors.append('Balance is empty')
+    elif balance is None:
+        errors.append(f"Invalid Balance '{_text(record.get('balance'))}'")
+    elif abs(balance) > MAX_TRANSACTION_AMOUNT:
+        errors.append('Balance is too large')
+
     description = _text(record.get('description'))
     if not description:
         errors.append('Description is empty')
@@ -294,6 +314,7 @@ def _validate_row(record):
         'transaction_id': transaction_id,
         'withdraw': str(withdraw),
         'deposit': str(deposit),
+        'balance': str(balance),
         'description': description,
         'notes': notes,
         'expense': None,
@@ -473,25 +494,6 @@ def _resolve_categories(user_id, wanted):
     return {key: ids[key] for key in wanted}, sorted(missing)
 
 
-def _recalculate_balances(user_id, account_id, from_date):
-    """Same running-balance rule as TransactionViewSet._recalculate_balances."""
-    account_txs = Transaction.objects.filter(user_id=user_id, company_account_id=account_id)
-    previous = (
-        account_txs.filter(date__lt=from_date).order_by('-date', '-id').values_list('balance', flat=True).first()
-    )
-    running = previous if previous is not None else Decimal('0.00')
-
-    updates = []
-    following = account_txs.filter(date__gte=from_date).order_by('date', 'id').only('id', 'deposit', 'withdraw', 'balance')
-    for tx in following.iterator(chunk_size=2000):
-        running = running + tx.deposit - tx.withdraw
-        if tx.balance != running:
-            tx.balance = running
-            updates.append(tx)
-    if updates:
-        Transaction.objects.bulk_update(updates, ['balance'], batch_size=CHUNK_SIZE)
-
-
 def _describe_expense(title, amount, tax_amount, category_name, expense_date):
     money = f'{amount:,}' + (f' + tax {tax_amount:,}' if tax_amount else '')
     return f"'{title}' {money} ({category_name or 'no category'}, {expense_date.isoformat()})"
@@ -509,6 +511,7 @@ def run_import(job, on_progress=None):
         row['date'] = date.fromisoformat(row['date'])
         row['withdraw'] = Decimal(row['withdraw'])
         row['deposit'] = Decimal(row['deposit'])
+        row['balance'] = Decimal(row['balance'])
 
     category_ids, created_categories = _resolve_categories(user_id, job.payload['categories'])
 
@@ -536,7 +539,6 @@ def run_import(job, on_progress=None):
         'deposit_rows': 0,
     }
     warnings = []
-    earliest_new_date = None
 
     for start in range(0, len(rows), CHUNK_SIZE):
         chunk = rows[start:start + CHUNK_SIZE]
@@ -556,14 +558,12 @@ def run_import(job, on_progress=None):
                 transaction_id=row['transaction_id'],
                 withdraw=row['withdraw'],
                 deposit=row['deposit'],
-                balance=Decimal('0.00'),
+                balance=row['balance'],
                 description=row['description'],
                 notes=row['notes'],
             )
             new_transactions.append(tx)
             matched.append((row, tx))
-            if earliest_new_date is None or row['date'] < earliest_new_date:
-                earliest_new_date = row['date']
         _insert_returning_ids(Transaction, new_transactions)
         counts['transactions_created'] += len(new_transactions)
 
@@ -624,9 +624,6 @@ def run_import(job, on_progress=None):
 
         if on_progress:
             on_progress(start + len(chunk))
-
-    if earliest_new_date is not None:
-        _recalculate_balances(user_id, account_id, earliest_new_date)
 
     # Every row must be accounted for exactly once, otherwise roll the whole job back.
     transactions_seen = counts['transactions_created'] + counts['transactions_existing']

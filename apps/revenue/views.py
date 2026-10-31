@@ -1971,76 +1971,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
         })
 
     def perform_create(self, serializer):
-        company_account = serializer.validated_data.get('company_account')
-        date = serializer.validated_data.get('date')
-
-        # Save with default balance 0 first
-        instance = serializer.save(user=self.request.user, balance=Decimal('0.00'))
-
-        # Recalculate balances for this account from the transaction date onward
-        self._recalculate_balances(company_account, from_date=date)
-        instance.refresh_from_db()
-
-    def perform_update(self, serializer):
-        instance = serializer.instance
-        old_account = instance.company_account
-        old_date = instance.date
-
-        updated_instance = serializer.save()
-
-        new_account = updated_instance.company_account
-        new_date = updated_instance.date
-
-        if old_account != new_account:
-            self._recalculate_balances(old_account, from_date=old_date)
-            self._recalculate_balances(new_account, from_date=new_date)
-        else:
-            min_date = min(old_date, new_date) if old_date and new_date else (new_date or old_date)
-            self._recalculate_balances(new_account, from_date=min_date)
-
-        updated_instance.refresh_from_db()
-
-    def perform_destroy(self, instance):
-        company_account = instance.company_account
-        tx_date = instance.date
-        user = instance.user
-        instance.delete()
-        self._recalculate_balances(company_account, from_date=tx_date, user=user)
-
-    def _recalculate_balances(self, company_account, from_date=None, user=None):
-        """Update balances for all transactions on or after from_date for the company account."""
-        if not company_account:
-            return
-
-        effective_user = user or (self.request.user if hasattr(self, 'request') and self.request and self.request.user.is_authenticated else company_account.user)
-
-        tx_query = Transaction.objects.filter(
-            user=effective_user,
-            company_account=company_account
-        )
-
-        if from_date:
-            previous_transaction = tx_query.filter(date__lt=from_date).order_by('-date', '-id').first()
-            running_balance = previous_transaction.balance if previous_transaction and previous_transaction.balance is not None else Decimal('0.00')
-            transactions = list(tx_query.filter(date__gte=from_date).order_by('date', 'id'))
-        else:
-            running_balance = Decimal('0.00')
-            transactions = list(tx_query.order_by('date', 'id'))
-
-        updates = []
-        for tx in transactions:
-            deposit = tx.deposit if tx.deposit is not None else Decimal('0.00')
-            withdraw = tx.withdraw if tx.withdraw is not None else Decimal('0.00')
-            running_balance = running_balance + deposit - withdraw
-            if tx.balance != running_balance:
-                tx.balance = running_balance
-                updates.append(tx)
-
-        if updates:
-            Transaction.objects.bulk_update(updates, ['balance'])
-
-    def _update_subsequent_balances(self, company_account, from_date, exclude_id=None):
-        self._recalculate_balances(company_account, from_date=from_date)
+        serializer.save(user=self.request.user)
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser, JSONParser])
     def bulk_upload(self, request):
@@ -2090,6 +2021,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 col_map['withdraw'] = idx
             elif 'deposit' in normalized:
                 col_map['deposit'] = idx
+            elif 'balance' in normalized and 'balance' not in col_map:
+                col_map['balance'] = idx
             elif ('description' in normalized or 'detail' in normalized) and 'description' not in col_map:
                 col_map['description'] = idx
             elif ('note' in normalized or 'memo' in normalized) and 'notes' not in col_map:
@@ -2098,12 +2031,14 @@ class TransactionViewSet(viewsets.ModelViewSet):
         missing_cols = []
         if 'date' not in col_map:
             missing_cols.append('date')
+        if 'balance' not in col_map:
+            missing_cols.append('balance')
         if 'description' not in col_map:
             missing_cols.append('description')
 
         if missing_cols:
             return Response({
-                'error': f"Missing required columns in Excel header: {', '.join(missing_cols)}. Expected headers include: date, transection id, withdraw amount, depostie amount, description, notes."
+                'error': f"Missing required columns in Excel header: {', '.join(missing_cols)}. Expected headers include: date, transection id, withdraw amount, depostie amount, balance, description, notes."
             }, status=status.HTTP_400_BAD_REQUEST)
 
         # Helper function to parse date
@@ -2139,6 +2074,18 @@ class TransactionViewSet(viewsets.ModelViewSet):
             except (InvalidOperation, ValueError):
                 return None, False
 
+        # Balance is taken from the file as-is (it can be negative); it is never calculated.
+        def parse_balance(val):
+            if val is None or str(val).strip() == '':
+                return None
+            val_str = str(val).strip().replace(',', '').replace('¥', '').replace('$', '')
+            try:
+                dec = Decimal(val_str).quantize(Decimal('0.01'))
+            except (InvalidOperation, ValueError):
+                return None
+            # Transaction.balance holds 12 digits with 2 decimal places.
+            return dec if abs(dec) < Decimal('10000000000') else None
+
         # 2. Pre-validate row by row
         row_errors = []
         parsed_records = []
@@ -2167,6 +2114,12 @@ class TransactionViewSet(viewsets.ModelViewSet):
             if not deposit_valid:
                 errors.append(f"Invalid Deposit amount '{raw_deposit}'")
 
+            # Balance validation
+            raw_balance = row[col_map['balance']] if col_map['balance'] < len(row) else None
+            balance_val = parse_balance(raw_balance)
+            if balance_val is None:
+                errors.append(f"Invalid or missing Balance '{raw_balance if raw_balance is not None else ''}'")
+
             # Description validation
             raw_desc = row[col_map['description']] if col_map['description'] < len(row) else None
             desc_str = str(raw_desc).strip() if raw_desc is not None else ""
@@ -2189,6 +2142,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     'transaction_id': tx_id_str[:500],
                     'withdraw': withdraw_val,
                     'deposit': deposit_val,
+                    'balance': balance_val,
                     'description': desc_str[:500],
                     'notes': notes_str,
                 })
@@ -2204,39 +2158,22 @@ class TransactionViewSet(viewsets.ModelViewSet):
         if not parsed_records:
             return Response({'error': 'No valid data rows found in the uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. Process & Auto-calculate Balances Chronologically
-        parsed_records.sort(key=lambda r: (r['date'], r['row_idx']))
-
-        earliest_date = parsed_records[0]['date']
-
-        latest_prev = Transaction.objects.filter(
-            user=request.user,
-            company_account=company_account,
-            date__lt=earliest_date
-        ).order_by('-date', '-id').first()
-
-        running_balance = latest_prev.balance if latest_prev else Decimal('0.00')
-
-        transactions_to_create = []
-        with transaction.atomic():
-            for rec in parsed_records:
-                running_balance = running_balance + rec['deposit'] - rec['withdraw']
-                tx = Transaction(
-                    user=request.user,
-                    company_account=company_account,
-                    date=rec['date'],
-                    transaction_id=rec['transaction_id'],
-                    withdraw=rec['withdraw'],
-                    deposit=rec['deposit'],
-                    balance=running_balance,
-                    description=rec['description'],
-                    notes=rec['notes']
-                )
-                transactions_to_create.append(tx)
-
-            Transaction.objects.bulk_create(transactions_to_create)
-
-            self._update_subsequent_balances(company_account, earliest_date, exclude_id=None)
+        # 3. Create the transactions with the balances given in the file
+        transactions_to_create = [
+            Transaction(
+                user=request.user,
+                company_account=company_account,
+                date=rec['date'],
+                transaction_id=rec['transaction_id'],
+                withdraw=rec['withdraw'],
+                deposit=rec['deposit'],
+                balance=rec['balance'],
+                description=rec['description'],
+                notes=rec['notes']
+            )
+            for rec in parsed_records
+        ]
+        Transaction.objects.bulk_create(transactions_to_create)
 
         return Response({
             'message': f'Successfully imported {len(transactions_to_create)} transactions.',

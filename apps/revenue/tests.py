@@ -1,12 +1,15 @@
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from openpyxl import Workbook
 from rest_framework.test import APIClient
 
 from apps.account.models import User
 from apps.expense.models import Expense, ExpenseCategory
-from apps.revenue.models import Auction, Car, CarCategory, Order, OrderItem
+from apps.revenue.models import Auction, Car, CarCategory, CompanyAccount, Order, OrderItem, Transaction
 
 URL = '/api/revenue/orders/dashboard/'
 
@@ -153,3 +156,77 @@ class AuctionTypeTests(TestCase):
         self.assertEqual(names, ['USS Tokyo'])
         self.assertEqual(self.client.get('/api/revenue/auctions/?search=online').json()['count'], 1)
         self.assertEqual(self.client.get('/api/revenue/auctions/types/').json(), ['Online', 'USS'])
+
+
+class TransactionBalanceTests(TestCase):
+    """The balance is whatever the user enters; the backend never recalculates it."""
+    URL = '/api/revenue/transactions/'
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='owner', email='owner@example.com', password='x')
+        self.account = CompanyAccount.objects.create(
+            user=self.user, bank_name='Bank', account_number='1', branch_code='1', account_holder='Owner'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def create(self, **fields):
+        data = {'date': '2026-01-10', 'withdraw': 0, 'deposit': 1000, 'balance': 5000,
+                'description': 'd', 'company_account': self.account.id, **fields}
+        return self.client.post(self.URL, data, format='json')
+
+    def test_balance_is_required(self):
+        response = self.create(balance=None)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('balance', response.data)
+
+    def test_crud_keeps_the_entered_balances(self):
+        later = self.create(date='2026-01-20', balance=7777)
+        self.assertEqual(later.status_code, 201, later.data)
+        earlier = self.create(date='2026-01-05', deposit=300, balance=-250.5)
+        self.assertEqual(earlier.status_code, 201, earlier.data)
+        self.assertEqual(Decimal(earlier.data['balance']), Decimal('-250.50'))
+
+        response = self.client.patch(f"{self.URL}{earlier.data['id']}/", {'deposit': 900, 'balance': 1234}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(Decimal(response.data['balance']), Decimal('1234.00'))
+
+        self.assertEqual(self.client.delete(f"{self.URL}{earlier.data['id']}/").status_code, 204)
+        self.assertEqual(Transaction.objects.get(pk=later.data['id']).balance, Decimal('7777.00'))
+
+    def upload(self, headers, rows):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        buffer = BytesIO()
+        wb.save(buffer)
+        return self.client.post(self.URL + 'bulk_upload/', {
+            'file': SimpleUploadedFile('tx.xlsx', buffer.getvalue()),
+            'company_account': self.account.id,
+        }, format='multipart')
+
+    def test_bulk_upload_requires_the_balance_column(self):
+        response = self.upload(['date', 'withdraw amount', 'deposit amount', 'description'],
+                               [['2026-01-10', 100, None, 'x']])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('balance', response.data['error'])
+        self.assertEqual(Transaction.objects.count(), 0)
+
+    def test_bulk_upload_rejects_rows_without_a_balance(self):
+        response = self.upload(['date', 'withdraw amount', 'deposit amount', 'balance', 'description'],
+                               [['2026-01-10', 100, None, 900, 'ok'], ['2026-01-11', 100, None, None, 'x'],
+                                ['2026-01-12', 100, None, 'abc', 'y']])
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual([e.split(':')[0] for e in response.data['row_errors']], ['Row 3', 'Row 4'])
+        self.assertEqual(Transaction.objects.count(), 0)
+
+    def test_bulk_upload_stores_the_file_balances(self):
+        Transaction.objects.create(user=self.user, company_account=self.account, date=date(2026, 1, 1),
+                                   deposit=10000, balance=10000, description='Opening')
+        response = self.upload(['date', 'transection id', 'withdraw amount', 'depostie amount', 'balance', 'description'],
+                               [['2026-01-10', 'T1', 100, None, '1,234', 'a'], ['2026-01-11', 'T2', None, 50, -20.25, 'b']])
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(list(Transaction.objects.order_by('date').values_list('balance', flat=True)),
+                         [Decimal('10000.00'), Decimal('1234.00'), Decimal('-20.25')])

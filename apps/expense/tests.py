@@ -18,17 +18,18 @@ from apps.expense.serializers import ExpenseSerializer
 from apps.revenue.models import CompanyAccount, Transaction
 
 URL = '/api/expenses/bulk-import/'
-HEADERS = ['date', 'transection id', 'withdraw amount', 'deposite amount', 'description',
+HEADERS = ['date', 'transection id', 'withdraw amount', 'deposite amount', 'balance', 'description',
            'notes', 'title', 'catagory', 'tax way', 'tax rate']
 
 
 def withdraw_row(tx_id='TXN-1', amount=1100, day='2026-01-15', description='Printer paper',
-                 category='Office', tax_way='Inclusive', tax_rate=10, title='Paper', notes='note'):
-    return [day, tx_id, amount, None, description, notes, title, category, tax_way, tax_rate]
+                 category='Office', tax_way='Inclusive', tax_rate=10, title='Paper', notes='note', balance=0):
+    return [day, tx_id, amount, None, balance, description, notes, title, category, tax_way, tax_rate]
 
 
-def deposit_row(tx_id='DEP-1', amount=5000, day='2026-01-16', description='Customer payment', notes='note'):
-    return [day, tx_id, None, amount, description, notes, None, None, None, None]
+def deposit_row(tx_id='DEP-1', amount=5000, day='2026-01-16', description='Customer payment', notes='note',
+                balance=0):
+    return [day, tx_id, None, amount, balance, description, notes, None, None, None, None]
 
 
 def make_xlsx(rows, headers=HEADERS, name='import.xlsx', percent_cells=()):
@@ -94,9 +95,9 @@ class BulkImportTests(TestCase):
         self.assertIn('Duplicate column(s): Date', response.data['error'])
 
     def test_correctly_spelled_headers_in_any_order_are_accepted(self):
-        headers = ['Tax Rate (%)', 'Tax Way', 'Category', 'Title', 'Notes', 'Description',
+        headers = ['Tax Rate (%)', 'Tax Way', 'Category', 'Title', 'Notes', 'Description', 'Balance',
                    'Deposit Amount', 'Withdraw Amount', 'Transaction ID', 'Date']
-        row = [10, 'inclusive', 'Office', 'Paper', 'note', 'Printer paper', None, 1100, 'TXN-1', '2026-01-15']
+        row = [10, 'inclusive', 'Office', 'Paper', 'note', 'Printer paper', 0, None, 1100, 'TXN-1', '2026-01-15']
         job = self.run_import([row], headers=headers)
         self.assertEqual(job.status, 'completed')
         self.assertEqual(Expense.objects.get().title, 'Paper')
@@ -106,8 +107,8 @@ class BulkImportTests(TestCase):
             withdraw_row(),                                              # row 2: fine
             withdraw_row(tx_id=None),                                    # row 3
             withdraw_row(day='not a date'),                              # row 4
-            [date(2026, 1, 15), 'T', None, None, 'd', 'n', 't', 'c', 'inclusive', 10],   # row 5: no amount
-            [date(2026, 1, 15), 'T', 10, 10, 'd', 'n', 't', 'c', 'inclusive', 10],       # row 6: both amounts
+            [date(2026, 1, 15), 'T', None, None, 0, 'd', 'n', 't', 'c', 'inclusive', 10],   # row 5: no amount
+            [date(2026, 1, 15), 'T', 10, 10, 0, 'd', 'n', 't', 'c', 'inclusive', 10],       # row 6: both amounts
             withdraw_row(description=None),                              # row 7
             withdraw_row(notes='  '),                                    # row 8
             withdraw_row(title=None),                                    # row 9
@@ -119,12 +120,14 @@ class BulkImportTests(TestCase):
             withdraw_row(amount=-5),                                     # row 15
             withdraw_row(amount='abc'),                                  # row 16
             deposit_row(description=None),                               # row 17
+            withdraw_row(balance=None),                                  # row 18
+            withdraw_row(balance='abc'),                                 # row 19
         ]
         response = self.upload(rows)
         self.assertEqual(response.status_code, 400)
         errors = response.data['row_errors']
-        self.assertEqual(response.data['total_errors'], 15)
-        self.assertEqual([e.split(':')[0] for e in errors], [f'Row {n}' for n in range(3, 18)])
+        self.assertEqual(response.data['total_errors'], 17)
+        self.assertEqual([e.split(':')[0] for e in errors], [f'Row {n}' for n in range(3, 20)])
         expected = {
             3: 'Transaction ID is empty', 4: "Invalid Date 'not a date'",
             5: 'Either Withdraw Amount or Deposit Amount is required',
@@ -133,7 +136,7 @@ class BulkImportTests(TestCase):
             10: 'Category is empty', 11: "Invalid Tax Way 'maybe'", 12: 'Tax Rate is empty',
             13: "Invalid Tax Rate '150'", 14: 'looks like a fraction',
             15: "Invalid Withdraw Amount '-5'", 16: "Invalid Withdraw Amount 'abc'",
-            17: 'Description is empty',
+            17: 'Description is empty', 18: 'Balance is empty', 19: "Invalid Balance 'abc'",
         }
         for error in errors:
             row_number = int(error.split(':')[0].replace('Row ', ''))
@@ -143,7 +146,7 @@ class BulkImportTests(TestCase):
         self.assert_nothing_imported()
 
     def test_blank_rows_are_skipped_but_keep_real_row_numbers(self):
-        rows = [withdraw_row(), [None] * 10, withdraw_row(tx_id='TXN-2', title=None)]
+        rows = [withdraw_row(), [None] * 11, withdraw_row(tx_id='TXN-2', title=None)]
         response = self.upload(rows)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data['row_errors'], ['Row 4: Title is empty'])
@@ -169,16 +172,17 @@ class BulkImportTests(TestCase):
 
     # ---- importing ----------------------------------------------------------------------
 
-    def test_import_creates_transactions_expenses_and_balances(self):
+    def test_import_creates_transactions_expenses_and_file_balances(self):
         Transaction.objects.create(
             user=self.user, company_account=self.account, date=date(2026, 1, 1), transaction_id='OPEN',
             withdraw=0, deposit=10000, balance=10000, description='Opening',
         )
         rows = [
-            withdraw_row(tx_id='TXN-1', amount=1100, tax_way='INCLUSIVE', tax_rate=10),
-            withdraw_row(tx_id='TXN-2', amount=1000, tax_way='exclusive', tax_rate='8%', description='Lunch', category='food'),
-            withdraw_row(tx_id='TXN-3', amount=500, tax_way='Excl', tax_rate=0, description='Stamp'),
-            deposit_row(tx_id='DEP-1', amount=5000),
+            withdraw_row(tx_id='TXN-1', amount=1100, tax_way='INCLUSIVE', tax_rate=10, balance=8900),
+            withdraw_row(tx_id='TXN-2', amount=1000, tax_way='exclusive', tax_rate='8%', description='Lunch', category='food',
+                         balance='7,900'),
+            withdraw_row(tx_id='TXN-3', amount=500, tax_way='Excl', tax_rate=0, description='Stamp', balance=-100),
+            deposit_row(tx_id='DEP-1', amount=5000, balance=4900.5),
         ]
         response = self.upload(rows)
         self.assertEqual(response.status_code, 202)
@@ -221,7 +225,7 @@ class BulkImportTests(TestCase):
         balances = list(Transaction.objects.order_by('date', 'id').values_list('transaction_id', 'balance'))
         self.assertEqual(balances, [
             ('OPEN', Decimal('10000.00')), ('TXN-1', Decimal('8900.00')), ('TXN-2', Decimal('7900.00')),
-            ('TXN-3', Decimal('7400.00')), ('DEP-1', Decimal('12400.00')),
+            ('TXN-3', Decimal('-100.00')), ('DEP-1', Decimal('4900.50')),
         ])
 
     def test_tax_numbers_match_a_manually_entered_expense(self):
@@ -237,7 +241,7 @@ class BulkImportTests(TestCase):
             self.assertEqual(bulk_import.split_tax(Decimal(amount), Decimal(percent), tax_category), expected)
 
     def test_percent_formatted_tax_rate_cell(self):
-        job = self.run_import([withdraw_row(tax_rate=0.1)], percent_cells=['J2'])
+        job = self.run_import([withdraw_row(tax_rate=0.1)], percent_cells=['K2'])
         self.assertEqual(job.status, 'completed')
         self.assertEqual(Expense.objects.get().tax_percent_used, Decimal('10.00'))
 
@@ -370,7 +374,7 @@ class BulkImportTests(TestCase):
         self.assertEqual(self.client.get(URL + f"review/?job={pending['id']}").data['transactions'], [])
 
     def test_large_file_spanning_many_chunks_stays_query_efficient(self):
-        rows = [withdraw_row(tx_id=f'TXN-{i}', amount=100 + i, category=f'Cat {i % 3}') for i in range(1200)]
+        rows = [withdraw_row(tx_id=f'TXN-{i}', amount=100 + i, category=f'Cat {i % 3}', balance=i) for i in range(1200)]
         response = self.upload(rows)
         self.assertEqual(response.status_code, 202)
         # 2400 records are written in batches. The exact statement count depends on the database
@@ -381,8 +385,7 @@ class BulkImportTests(TestCase):
         job = ExpenseImportJob.objects.get()
         self.assertEqual(job.status, 'completed')
         self.assertEqual((Transaction.objects.count(), Expense.objects.count()), (1200, 1200))
-        self.assertEqual(Transaction.objects.order_by('date', 'id').last().balance,
-                         -sum(Decimal(100 + i) for i in range(1200)))
+        self.assertEqual(Transaction.objects.order_by('date', 'id').last().balance, Decimal('1199.00'))
 
     # ---- all-or-nothing -----------------------------------------------------------------
 
