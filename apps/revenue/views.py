@@ -539,26 +539,27 @@ class OrderViewSet(viewsets.ModelViewSet):
                 chart_year = int(year)
             except (ValueError, TypeError):
                 pass
-        if not chart_year:
-            chart_year = datetime.now().year
 
         year_orders = Order.objects.filter(
             user=request.user,
-            transaction_date__year=chart_year,
             payment_status='completed'
         )
+        year_expenses = Expense.objects.filter(
+            user=request.user
+        )
+
+        if chart_year:
+            year_orders = year_orders.filter(transaction_date__year=chart_year)
+            year_expenses = year_expenses.filter(date__year=chart_year)
+
         year_revenue = year_orders.exclude(transaction_type='purchase').values('transaction_date__month').annotate(total=Sum('total_amount'))
         year_purchases = year_orders.filter(transaction_type='purchase').values('transaction_date__month').annotate(total=Sum('total_amount'))
-
-        year_expenses = Expense.objects.filter(
-            user=request.user,
-            date__year=chart_year
-        ).values('date__month').annotate(total=Sum('amount'))
+        year_expenses_agg = year_expenses.values('date__month').annotate(total=Sum('amount'))
 
         month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
         rev_map = {item['transaction_date__month']: float(item['total'] or 0) for item in year_revenue}
         purchase_map = {item['transaction_date__month']: float(item['total'] or 0) for item in year_purchases}
-        exp_map = {item['date__month']: float(item['total'] or 0) for item in year_expenses}
+        exp_map = {item['date__month']: float(item['total'] or 0) for item in year_expenses_agg}
 
         monthly_chart = []
         has_chart_data = False
