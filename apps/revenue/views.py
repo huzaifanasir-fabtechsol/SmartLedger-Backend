@@ -24,7 +24,6 @@ from apps.revenue.serializers import CarSerializer, CarCategorySerializer, Order
 from project.pagination import CustomPageNumberPagination
 from apps.expense.models import Expense
 from django.conf import settings
-from apps.account.models import User
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase import pdfmetrics
 from reportlab.platypus import Image
@@ -1128,9 +1127,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         order = self.get_object()
         is_auction = order.transaction_type == 'auction'
         pdfmetrics.registerFont(UnicodeCIDFont('HeiseiMin-W3'))
-        user = User.objects.filter(email='user@example.com').first()
-        if not user:
-            return Response({'error': 'Admin user not found'}, status=404)
+        # Letterhead details come from the order's owner (always request.user,
+        # since get_queryset filters by user).
+        user = order.user or request.user
 
         response = HttpResponse(content_type='application/pdf')
         response['Content-Disposition'] = (
@@ -1251,10 +1250,10 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         # Company info in top right, invoice details below
         header_data = [
-            ["", "", Paragraph(user.company_name, company_name_style)],
-            ["", "", user.company_address],
-            ["", "", f"TEL/FAX: {user.company_phone}"],
-            ["", "", f"{user.business_registration}"],
+            ["", "", Paragraph(user.company_name or '', company_name_style)],
+            ["", "", user.company_address or ''],
+            ["", "", f"TEL/FAX: {user.company_phone or ''}"],
+            ["", "", user.business_registration or ''],
             ["", "", f"NO. {order.order_number}"],
             ["", "", f"Date : {order.transaction_date.strftime('%Y-%m-%d')}"],
         ]
